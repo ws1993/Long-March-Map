@@ -34,8 +34,9 @@ src/
     plot.ts                进攻箭头、钳击箭头、集结地、防御阵地、阻击点
   map/                     地图图层装配
     basemap.ts             底图样式（地形 + 省界 + 河流）
-    routes.ts              路线三段化（past / active / future）与流动动画
+    routes.ts              路线三段化（past / active / future）+ 虚线→实线过渡
     nodes.ts               DOM 节点标注 + 分级显示
+    routeLabels.ts         图上部队注记（DOM Marker，随图例开关联动）
     situation.ts           态势标绘 → GeoJSON
   ui/                      界面
     timeline.ts            时间轴控制器
@@ -79,6 +80,8 @@ docs/
 - **标绘**：`src/plot/` 用 340 行纯 TypeScript 实现箭头/钳击/集结地/防线的几何生成，在 Mercator 平面内计算以保证「宽度 N 公里」量得准；
 - **文字**：全部用 DOM Marker 渲染，不依赖 glyph 字体服务，中文离线可显示；
 - **包体积**：主包 gzip 36 KB + maplibre 299 KB + 总览地形 9.1 MB + 战场地形 0.4 MB。
+- **节点定位**：`.lm-node` 必须保持 `position: absolute`（由 maplibre 用内联 `transform` 接管）。一旦被写成 `relative`/`static`，节点会掉回文档流，缩放时整体漂移（实测 Y 偏 252px）；按类别隐藏的节点用 `visibility` 而非 `display: none`，否则 `offsetWidth` 归零会让 maplibre 重算 transform 时丢掉居中偏移，恢复显示后固定偏 11.5px；
+- **生产构建注意**：maplibre 6 的自带 Worker 按 `new URL('./maplibre-gl-worker.mjs', import.meta.url)` 定位，必须和打包 chunk 同目录。`vite.config.ts` 里的 `maplibreWorkerFile()` 插件在 `closeBundle` 阶段把它拷进 `dist/assets/`，删掉该插件会导致构建版地图完全不渲染（dev 环境不暴露此问题）。
 
 选型理由与适用边界见 [技术栈调研](docs/00-tech-stack.md)。
 

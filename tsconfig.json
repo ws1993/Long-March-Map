@@ -15,7 +15,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": false,
-    "types": ["vite/client", "geojson"],
+    "types": ["vite/client", "geojson", "node"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
