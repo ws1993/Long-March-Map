@@ -80,7 +80,8 @@ Plot 控件（绑定 ol.Map）
 | --- | --- | --- |
 | 标绘面（箭头/集结地/防线） | maplibre `fill` + `line` layer | 矢量、可随缩放重绘、性能好 |
 | 部队番号文字 | DOM Marker | 中文字体无需 glyph 服务，且可做 CSS 动效 |
-| 行军路线 | maplibre `line` layer + GeoJSON | 支持 dash 流动动画、按部队过滤 |
+| 行军路线 | maplibre `line` layer + GeoJSON | 支持虚/实线分层与渐变过渡、按部队过滤 |
+| 部队名注记 | DOM Marker | 同番号文字，避开 glyph 依赖、可随图例开关收起 |
 | 节点标注 | DOM Marker | 同上，且需要悬停/选中态 |
 
 ## 4. 逐项对比
