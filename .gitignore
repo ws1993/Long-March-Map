@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.vite/
+scripts/_raw/
+*.local
+.DS_Store
+Thumbs.db

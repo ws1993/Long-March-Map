@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>红军长征地图 · 二万五千里</title>
+    <meta
+      name="description"
+      content="红军长征可视化：四支主力部队行军路线、重要会议与战役节点、四渡赤水等敌我作战态势。数据标注来源与置信度。"
+    />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="map" class="lm-map"></div>
+
+      <!-- 顶部标识 -->
+      <header class="lm-topbar">
+        <div class="lm-brand">
+          <div class="lm-brand__star" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2.4l2.7 5.9 6.4.8-4.7 4.4 1.2 6.3L12 16.8 6.4 19.8l1.2-6.3L2.9 9.1l6.4-.8z"/></svg>
+          </div>
+          <div class="lm-brand__text">
+            <h1>红军长征地图</h1>
+            <p>1934.10 — 1936.10 · 四支主力 · 一次改变中国命运的远征</p>
+          </div>
+        </div>
+        <nav class="lm-actions">
+          <button class="lm-btn" id="btn-situation" type="button">
+            <span class="lm-btn__dot"></span>作战态势
+          </button>
+          <button class="lm-btn lm-btn--ghost" id="btn-about" type="button">关于数据</button>
+        </nav>
+      </header>
+
+      <!-- 图层控制 -->
+      <aside class="lm-panel lm-layers" id="layers">
+        <button class="lm-panel__toggle" id="layers-toggle" type="button" aria-expanded="true">
+          图层
+          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" /></svg>
+        </button>
+        <div class="lm-layers__body">
+          <section>
+            <h3>部队</h3>
+            <div class="lm-legend" id="legend-armies"></div>
+          </section>
+          <section>
+            <h3>节点</h3>
+            <div class="lm-legend lm-legend--check" id="legend-kinds"></div>
+          </section>
+        </div>
+      </aside>
+
+      <!-- 节点详情抽屉 -->
+      <aside class="lm-detail" id="detail" aria-hidden="true">
+        <button class="lm-detail__close" id="detail-close" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" /></svg>
+        </button>
+        <div class="lm-detail__body" id="detail-body"></div>
+      </aside>
+
+      <!-- 底部时间轴 -->
+      <footer class="lm-timeline" id="timeline">
+        <div class="lm-timeline__head">
+          <button class="lm-play" id="btn-play" type="button" aria-label="播放长征进程">
+            <svg class="lm-play__icon" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" /></svg>
+            <svg class="lm-play__pause" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg>
+          </button>
+          <div class="lm-clock">
+            <span class="lm-clock__date" id="clock-date">1934 年 10 月 10 日</span>
+            <span class="lm-clock__sub" id="clock-sub">中央红军自瑞金出发</span>
+          </div>
+          <div class="lm-speed">
+            <button type="button" data-speed="0.5">0.5×</button>
+            <button type="button" data-speed="1" class="is-on">1×</button>
+            <button type="button" data-speed="2">2×</button>
+            <button type="button" data-speed="4">4×</button>
+          </div>
+        </div>
+        <div class="lm-track" id="track">
+          <div class="lm-track__rail"><div class="lm-track__fill" id="track-fill"></div></div>
+          <div class="lm-track__ticks" id="track-ticks"></div>
+          <input
+            type="range"
+            id="time-slider"
+            min="0"
+            max="1000"
+            value="0"
+            step="1"
+            aria-label="长征时间轴"
+          />
+        </div>
+      </footer>
+
+      <!-- 态势面板 -->
+      <section class="lm-situation" id="situation" aria-hidden="true">
+        <div class="lm-situation__bar">
+          <button class="lm-btn lm-btn--ghost" id="sit-back" type="button">← 返回总览</button>
+          <div class="lm-situation__title">
+            <h2 id="sit-title">四渡赤水</h2>
+            <p id="sit-subtitle"></p>
+          </div>
+          <div class="lm-situation__sides" id="sit-sides"></div>
+        </div>
+        <div class="lm-situation__steps" id="sit-steps"></div>
+        <article class="lm-situation__card" id="sit-card"></article>
+      </section>
+
+      <!-- 数据说明弹层 -->
+      <div class="lm-modal" id="about" aria-hidden="true">
+        <div class="lm-modal__inner">
+          <button class="lm-modal__close" id="about-close" type="button" aria-label="关闭">
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" /></svg>
+          </button>
+          <div class="lm-modal__body" id="about-body"></div>
+        </div>
+      </div>
+
+      <div class="lm-loading" id="loading"><span></span>正在展开地形沙盘…</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
