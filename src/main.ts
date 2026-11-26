@@ -19,6 +19,7 @@ import { renderAbout, renderNodeDetail } from './ui/detail';
 import { SituationPanel } from './ui/situationPanel';
 import { Timeline } from './ui/timeline';
 import { situationBundles } from './data/situations';
+import { RouteLabelLayer } from './map/routeLabels';
 
 const allNodes: StoryNode[] = [...centralRedNodes, ...otherNodes].sort((a, b) => a.date.localeCompare(b.date));
 
@@ -65,6 +66,8 @@ async function boot() {
     nodes: allNodes,
     onSelect: (node) => openDetail(node),
   });
+  // 路线注记：直接把"这条线是谁的"标在图上，不再只靠图例辨认
+  const routeLabels = new RouteLabelLayer(map);
 
   // ---------------------------------------------------------------- 时间轴
   const timeline = new Timeline({
@@ -157,10 +160,17 @@ async function boot() {
     const filter: maplibregl.ExpressionSpecification | null = ids.length
       ? ['in', ['get', 'armyId'], ['literal', ids]]
       : ['==', ['get', 'armyId'], '__none__'];
-    for (const lid of ['routes-future-line', 'routes-past-glow', 'routes-past-line', 'routes-active-line']) {
+    for (const lid of [
+      'routes-future-line',
+      'routes-past-glow',
+      'routes-past-line',
+      'routes-ghost-line',
+      'routes-active-line',
+    ]) {
       map.setFilter(lid, filter as unknown as maplibregl.FilterSpecification);
     }
     map.setFilter('route-heads-circle', filter as unknown as maplibregl.FilterSpecification);
+    routeLabels.setVisible(new Set(ids));
   }
 
   const legendKinds = document.getElementById('legend-kinds') as HTMLElement;
@@ -210,10 +220,12 @@ async function boot() {
     document.body.classList.add('lm-mode-situation');
     timelineBar.classList.add('is-hidden');
     nodeLayer.setVisible(new Set());
+    routeLabels.setMode(true);
     map.setFilter('routes-future-line', ['==', ['get', 'armyId'], '__none__']);
     map.setFilter('routes-past-glow', ['==', ['get', 'armyId'], '__none__']);
     map.setFilter('routes-past-line', ['==', ['get', 'armyId'], '__none__']);
     map.setFilter('routes-active-line', ['==', ['get', 'armyId'], '__none__']);
+    map.setFilter('routes-ghost-line', ['==', ['get', 'armyId'], '__none__']);
     map.setFilter('route-heads-circle', ['==', ['get', 'armyId'], '__none__']);
     situation.open(bundleIndex);
   }
@@ -223,6 +235,7 @@ async function boot() {
     document.body.classList.remove('lm-mode-situation');
     timelineBar.classList.remove('is-hidden');
     nodeLayer.setVisible(visibleKinds);
+    routeLabels.setMode(false);
     applyRouteFilter();
     map.fitBounds(HOME_BOUNDS, { padding: HOME_PADDING, duration: 1000 });
   }

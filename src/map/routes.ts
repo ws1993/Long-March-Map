@@ -160,6 +160,7 @@ export function addRouteLayers(map: MlMap) {
   map.addSource('routes-future', { type: 'geojson', data: empty });
   map.addSource('routes-past', { type: 'geojson', data: empty });
   map.addSource('routes-active', { type: 'geojson', data: empty });
+  map.addSource('routes-ghost', { type: 'geojson', data: empty });
   map.addSource('route-heads', { type: 'geojson', data: empty });
 
   map.addLayer({
@@ -170,7 +171,7 @@ export function addRouteLayers(map: MlMap) {
     paint: {
       'line-color': ['get', 'color'],
       'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 8, 3.2],
-      'line-opacity': 0.55,
+      'line-opacity': ['coalesce', ['get', 'alpha'], 0.55],
       'line-dasharray': [2.6, 1.8],
     },
   });
@@ -183,7 +184,7 @@ export function addRouteLayers(map: MlMap) {
     paint: {
       'line-color': ['get', 'color'],
       'line-width': ['interpolate', ['linear'], ['zoom'], 3, 9, 8, 17],
-      'line-opacity': 0.22,
+      'line-opacity': ['*', 0.22, ['coalesce', ['get', 'alpha'], 1]],
       'line-blur': 4,
     },
   });
@@ -196,7 +197,22 @@ export function addRouteLayers(map: MlMap) {
     paint: {
       'line-color': ['get', 'color'],
       'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.4, 8, 4.2],
-      'line-opacity': 1,
+      'line-opacity': ['coalesce', ['get', 'alpha'], 1],
+    },
+  });
+
+  // 残影层：刚由「未到达」或「行进中」转为「已走过」的虚线在这里淡出，
+  // 让虚线消失与实线出现之间有 600~800ms 的交叉过渡，而不是硬切。
+  map.addLayer({
+    id: 'routes-ghost-line',
+    type: 'line',
+    source: 'routes-ghost',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 8, 3.4],
+      'line-opacity': ['coalesce', ['get', 'alpha'], 0.5],
+      'line-dasharray': [2.6, 1.8],
     },
   });
 
@@ -207,8 +223,9 @@ export function addRouteLayers(map: MlMap) {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.8, 8, 4.6],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.4, 8, 4.2],
       'line-opacity': 1,
+      'line-dasharray': [2.6, 1.8],
     },
   });
 
@@ -226,10 +243,103 @@ export function addRouteLayers(map: MlMap) {
   });
 }
 
-export function updateRouteLayers(map: MlMap, split: RouteSplit) {
-  (map.getSource('routes-future') as GeoJSONSource | undefined)?.setData(split.past ? split.future : split.future);
-  (map.getSource('routes-past') as GeoJSONSource | undefined)?.setData(split.past);
+// ---------------------------------------------------------------- 过渡状态机
+
+type Phase = 'past' | 'active' | 'future';
+
+/** 段从虚线转为实线的过渡时长（毫秒，真实时间，与时间轴速度无关） */
+const FADE_MS = 760;
+/** 刚转入 past 的段，记录真实时间起点 */
+const freshPast = new Map<string, number>();
+/** 虚线残影：刚离开 future / active 的段 */
+interface Ghost {
+  feature: GeoJSON.Feature;
+  base: number;
+  start: number;
+}
+const ghosts = new Map<string, Ghost>();
+const phaseOf = new Map<string, Phase>();
+
+let appliedMap: MlMap | null = null;
+let appliedSplit: RouteSplit | null = null;
+let animRaf = 0;
+
+const fc = (features: GeoJSON.Feature[]): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features });
+
+const keyOf = (f: GeoJSON.Feature) => String(f.properties?.id ?? '');
+
+const withAlpha = (f: GeoJSON.Feature, alpha: number): GeoJSON.Feature => ({
+  ...f,
+  properties: { ...(f.properties ?? {}), alpha },
+});
+
+/** easeOutCubic：起步快、收尾慢，肉眼上更接近"慢慢显影"而不是线性变亮 */
+const easeOut = (k: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, k)), 3);
+
+/** 对比新旧阶段，登记需要过渡的段 */
+function reconcile(split: RouteSplit, now: number) {
+  const next = new Map<string, Phase>();
+  for (const f of split.past.features) next.set(keyOf(f), 'past');
+  for (const f of split.active.features) next.set(keyOf(f), 'active');
+  for (const f of split.future.features) next.set(keyOf(f), 'future');
+
+  const find = (coll: GeoJSON.FeatureCollection, id: string) =>
+    coll.features.find((f) => keyOf(f) === id) ?? null;
+
+  for (const [id, phase] of next) {
+    const prev = phaseOf.get(id);
+    if (!prev || prev === phase) continue;
+    if (prev === 'future' && phase === 'active') {
+      const src = find(split.active, id);
+      if (src) ghosts.set(id, { feature: src, base: 0.5, start: now });
+    } else if (prev === 'active' && phase === 'past') {
+      const src = find(split.past, id);
+      if (src) {
+        ghosts.set(id, { feature: src, base: 0.8, start: now });
+        freshPast.set(id, now);
+      }
+    }
+  }
+
+  phaseOf.clear();
+  for (const [id, p] of next) phaseOf.set(id, p);
+
+  // 时间轴回拖时清掉不再存在的过渡记录，避免下次进入同一段时错误地"半透明"
+  for (const id of freshPast.keys()) if (phaseOf.get(id) !== 'past') freshPast.delete(id);
+}
+
+/** 按真实时间计算各层透明度并写入 source；返回是否还有未完成的过渡 */
+function flush(map: MlMap, split: RouteSplit, now: number): boolean {
+  let busy = false;
+
+  const past = split.past.features.map((f) => {
+    const t = freshPast.get(keyOf(f));
+    if (t === undefined) return f;
+    const k = easeOut((now - t) / FADE_MS);
+    if (k >= 1) {
+      freshPast.delete(keyOf(f));
+      return f;
+    }
+    busy = true;
+    return withAlpha(f, 0.3 + 0.7 * k);
+  });
+
+  const ghostFeatures: GeoJSON.Feature[] = [];
+  for (const [id, g] of ghosts) {
+    const k = easeOut((now - g.start) / FADE_MS);
+    if (k >= 1) {
+      ghosts.delete(id);
+      continue;
+    }
+    busy = true;
+    ghostFeatures.push(withAlpha(g.feature, g.base * (1 - k)));
+  }
+
+  (map.getSource('routes-future') as GeoJSONSource | undefined)?.setData(split.future);
+  (map.getSource('routes-past') as GeoJSONSource | undefined)?.setData(fc(past));
+  (map.getSource('routes-ghost') as GeoJSONSource | undefined)?.setData(fc(ghostFeatures));
   (map.getSource('routes-active') as GeoJSONSource | undefined)?.setData(split.active);
+
   const heads: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
     features: split.heads.map((h) => ({
@@ -239,20 +349,43 @@ export function updateRouteLayers(map: MlMap, split: RouteSplit) {
     })),
   };
   (map.getSource('route-heads') as GeoJSONSource | undefined)?.setData(heads);
+
+  return busy;
 }
 
-/** 路线流动动画：让正在行进的段呈现虚线推移效果 */
+/** 时间轴暂停时，过渡仍需按真实时间走完 */
+function ensureAnim() {
+  if (animRaf) return;
+  const loop = () => {
+    animRaf = 0;
+    if (!appliedMap || !appliedSplit) return;
+    if (flush(appliedMap, appliedSplit, performance.now())) animRaf = requestAnimationFrame(loop);
+  };
+  animRaf = requestAnimationFrame(loop);
+}
+
+export function updateRouteLayers(map: MlMap, split: RouteSplit) {
+  const now = performance.now();
+  appliedMap = map;
+  appliedSplit = split;
+  reconcile(split, now);
+  if (flush(map, split, now)) ensureAnim();
+}
+
+/**
+ * 行进段的呼吸光效。
+ *
+ * 早期版本每 90ms 在两种 dasharray 之间硬切做"虚线流动"，实测视觉上是闪烁而非流动
+ * （maplibre 没有 dashoffset，dasharray 无法连续插值）。这里改为按帧连续变化透明度，
+ * 保持虚线形态稳定，只让明暗平缓起伏。
+ */
 export function startRouteFlow(map: MlMap) {
-  let phase = 0;
   let raf = 0;
-  let last = performance.now();
+  const t0 = performance.now();
   const tick = (t: number) => {
-    if (t - last > 90) {
-      phase = (phase + 1) % 12;
-      if (map.getLayer('routes-active-line')) {
-        map.setPaintProperty('routes-active-line', 'line-dasharray', [phase % 6 === 0 ? 0.1 : 2, 1.6]);
-      }
-      last = t;
+    const s = 0.5 + 0.5 * Math.sin((t - t0) / 1200);
+    if (map.getLayer('routes-active-line')) {
+      map.setPaintProperty('routes-active-line', 'line-opacity', 0.82 + 0.18 * s);
     }
     raf = requestAnimationFrame(tick);
   };

@@ -14,7 +14,7 @@ export const siduChishui: Situation = {
   title: '四渡赤水',
   subtitle: '1935 年 1 月 — 4 月 · 中央红军 3 万余人对国民党军 40 万人',
   period: { from: '1935-01-19', to: '1935-04-01' },
-  camera: { center: [105.92, 28.16], zoom: 7.28, pitch: 0 },
+  camera: { center: [106.25, 27.90], zoom: 7.28, pitch: 0 },
   /** 战役级视图下把标绘放大到可读尺寸（真实千米量级 × 2.6） */
   plotScale: 2.6,
   detailTerrain: 'sidu',
@@ -28,6 +28,9 @@ export const siduChishui: Situation = {
     { coord: [106.38, 27.85], text: '茅台' },
     { coord: [105.98, 28.35], text: '太平渡' },
     { coord: [106.30, 27.66], text: '鲁班场' },
+    { coord: [105.60, 28.92], text: '长江' },
+    { coord: [105.36, 27.70], text: '赤水河' },
+    { coord: [106.92, 27.05], text: '乌江' },
   ],
   summary:
     '遵义会议后，中央红军拟北渡长江与红四方面军会合，但在土城受阻。毛泽东随即改变计划，在川黔滇边界的赤水河上四次渡河，忽东忽西、声东击西，把国民党军 40 万人的合围圈一次次甩在身后，最终南渡乌江、兵临贵阳，调出滇军，从容西进云南。这是中国军事史上机动战例的典范。',
@@ -134,6 +137,46 @@ export const siduChishui: Situation = {
           style: { width: 7000, headWidth: 19000, headLength: 18000, tailTaper: 0.7 },
           label: '湘军 何键部',
         },
+        // 敌：合围圈 —— 北长江、东湘军、南中央军、西滇军构成的四面包围态势
+        {
+          id: 'p0-e-encircle',
+          kind: 'markLine',
+          side: 'enemy',
+          path: [
+            [105.44, 28.87],
+            [105.44, 28.16],
+            [105.28, 27.30],
+            [106.63, 26.65],
+            [107.47, 27.07],
+            [107.20, 27.50],
+            [106.83, 28.13],
+            [106.65, 29.03],
+            [105.83, 28.81],
+            [105.44, 28.87],
+          ],
+          dashed: true,
+          label: '国民党军合围圈（约 40 万人）',
+        },
+        // 敌：自东南向遵义合击（钳形）
+        {
+          id: 'p0-e-pincer-south',
+          kind: 'pincer',
+          side: 'enemy',
+          start: [107.55, 27.05],
+          end: [106.95, 27.68],
+          style: { width: 6000, headWidth: 17000, headLength: 15000, spreadRatio: 0.5 },
+          label: '中央军两路合击遵义',
+        },
+        // 敌：川军自长江南岸压下来（钳形）
+        {
+          id: 'p0-e-pincer-north',
+          kind: 'pincer',
+          side: 'enemy',
+          start: [106.45, 28.95],
+          end: [106.10, 28.35],
+          style: { width: 5500, headWidth: 16000, headLength: 14000, spreadRatio: 0.45 },
+          label: '川军自长江南岸南下',
+        },
         // 红军集结
         {
           id: 'p0-r-assemble',
@@ -144,14 +187,6 @@ export const siduChishui: Situation = {
           radiusY: 18000,
           rotation: 15,
           label: '中央红军 3.7 万余人',
-        },
-        {
-          id: 'p0-label',
-          kind: 'text',
-          side: 'red',
-          coord: [106.93, 27.52],
-          text: '遵义',
-          size: 15,
         },
       ],
     },
@@ -382,6 +417,24 @@ export const siduChishui: Situation = {
           ],
           style: { width: 7000, headWidth: 19000, headLength: 17000, tailTaper: 0.7 },
           label: '滇军东进',
+        },
+        // 敌：向川南的合围圈（三面压向古蔺、叙永）
+        {
+          id: 'p3-e-encircle',
+          kind: 'markLine',
+          side: 'enemy',
+          path: [
+            [105.44, 28.87],
+            [104.90, 28.30],
+            [104.20, 27.55],
+            [105.28, 27.30],
+            [106.30, 27.66],
+            [106.60, 27.92],
+            [105.83, 28.81],
+            [105.44, 28.87],
+          ],
+          dashed: true,
+          label: '合围圈收向古蔺、叙永',
         },
         {
           id: 'p3-label',

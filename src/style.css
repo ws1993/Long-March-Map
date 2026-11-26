@@ -1109,8 +1109,8 @@ body {
   position: absolute;
   right: 24px;
   bottom: 24px;
-  width: min(400px, 90vw);
-  max-height: 44vh;
+  width: min(360px, 88vw);
+  max-height: 38vh;
   overflow-y: auto;
   padding: 20px 22px;
   border-radius: 14px;
@@ -1443,4 +1443,130 @@ body.lm-mode-situation .lm-layers {
     width: auto;
     max-height: 40vh;
   }
+}
+
+/* ---------------------------------------------------------------- 路线注记 */
+
+.lm-route-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0.94;
+  transition: opacity 0.32s var(--ease);
+}
+
+.lm-route-label--right {
+  flex-direction: row-reverse;
+}
+
+.lm-route-label__dash {
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+  flex: none;
+  background: linear-gradient(90deg, transparent, var(--route-color));
+}
+
+.lm-route-label--right .lm-route-label__dash {
+  background: linear-gradient(270deg, transparent, var(--route-color));
+}
+
+.lm-route-label__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lm-route-label__text strong {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--route-color);
+  text-shadow: 0 0 8px rgba(6, 10, 16, 0.95), 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.lm-route-label__text em {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.01em;
+  color: var(--ink-mid);
+  text-shadow: 0 0 8px rgba(6, 10, 16, 0.95), 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.lm-route-label.is-off,
+.lm-route-label.is-mode-hidden {
+  opacity: 0;
+}
+
+/* ---------------------------------------------------------------- 读图说明 */
+
+.lm-linekey {
+  display: grid;
+  gap: 4px;
+}
+
+.lm-linekey p {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 11.5px;
+  color: var(--ink-mid);
+}
+
+.lm-linekey__sample {
+  width: 22px;
+  flex: none;
+  height: 0;
+  border-top: 2.5px solid var(--ink-mid);
+}
+
+.lm-linekey__sample--active {
+  border-top-style: dashed;
+  border-top-color: var(--red-soft);
+}
+
+.lm-linekey__sample--future {
+  border-top: 2px dashed rgba(126, 158, 190, 0.5);
+}
+
+.lm-linekey__sample--head {
+  height: 20px;
+  border-top: 0;
+  background: radial-gradient(
+    circle at center,
+    var(--red) 0 3px,
+    #0b0f14 3px 4.6px,
+    transparent 4.6px
+  );
+}
+
+.lm-linekey p.lm-linekey__note {
+  display: block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+
+/* 读图说明排在图层面板最前，避免被部队/节点列表挤出可视区 */
+.lm-layers__body > section.lm-linekey {
+  order: -1;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 路线注记压在节点之上，避免被节点圆点切断 */
+.maplibregl-marker:has(> .lm-route-label) {
+  z-index: 5;
+}
+
+/* 标签底衬：节点密集处保证文字可读 */
+.lm-route-label__text {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(8, 12, 18, 0.62);
+  border: 1px solid rgba(126, 158, 190, 0.14);
 }
