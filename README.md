@@ -116,6 +116,7 @@ docs/
 - **包体积**：主包 gzip 36 KB + maplibre 299 KB + 总览地形 9.1 MB + 战场地形 0.4 MB。
 - **节点定位**：`.lm-node` 必须保持 `position: absolute`（由 maplibre 用内联 `transform` 接管）。一旦被写成 `relative`/`static`，节点会掉回文档流，缩放时整体漂移（实测 Y 偏 252px）；按类别隐藏的节点用 `visibility` 而非 `display: none`，否则 `offsetWidth` 归零会让 maplibre 重算 transform 时丢掉居中偏移，恢复显示后固定偏 11.5px；
 - **生产构建注意**：maplibre 6 的自带 Worker 按 `new URL('./maplibre-gl-worker.mjs', import.meta.url)` 定位，必须和打包 chunk 同目录。`vite.config.ts` 里的 `maplibreWorkerFile()` 插件在 `closeBundle` 阶段把它拷进 `dist/assets/`，删掉该插件会导致构建版地图完全不渲染（dev 环境不暴露此问题）。
+- **比例尺观感锁**：地图位置由日期唯一决定，屏幕位移速度 = 世界速度 × 2^zoom，所以同一倍速下放大一级，屏幕上的运动就快一倍——放大看细节时部队转眼掠过。`src/ui/speedLock.ts` 把时间推进速率乘以 `2^(refZoom − zoom)`（`refZoom` 取当前战役的默认相机 zoom），**放大即自动放慢时间**，使屏幕每秒划过的像素量恒定；缩小方向不补偿，保持原有手感。补偿因子逐帧一阶平滑（约 0.5 秒收敛），避免滚轮与运镜时速率突跳，下限 0.1 防止极深缩放把时间轴冻住。播放中若补偿明显偏离 1，时间轴会显示「观感锁 ×0.42」，说明时间变慢是比例尺造成的而非卡住。把 `SPEED_LOCK.strength` 改成 `0.85` 即可退回「保留一点放大略快」的折中手感。
 
 选型理由与适用边界见 [技术栈调研](docs/00-tech-stack.md)。
 
