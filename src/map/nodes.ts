@@ -55,7 +55,17 @@ export const KIND_META: Record<NodeKind, { label: string; shortTag: string; colo
   },
 };
 
-/** 一级骨架节点：全缩放级别始终显示图标并优先常显名称 */
+/** 小比例尺（全国总览 zoom < 5.45）仅常显名称的 6 个战略起止与转折支点，避免全局拥挤 */
+const MACRO_LABEL_IDS = new Set([
+  'n-ruijin',
+  'n-zunyi',
+  'n-luding',
+  'n-maogong',
+  'n-wuqi',
+  'n-huining',
+]);
+
+/** 一级骨架节点：全缩放级别显示圆点，中比例尺（zoom >= 5.45）起全部常显名称 */
 const CORE_IDS = new Set([
   'n-ruijin',
   'n-xiangjiang',
@@ -163,8 +173,13 @@ export class NodeLayer {
   }
 
   private refreshLayout() {
-    const maxIconTier = this.zoom >= 6.5 ? 3 : this.zoom >= 5.2 ? 2 : 1;
-    const maxLabelTier = this.zoom >= 6.6 ? 3 : this.zoom >= 5.4 ? 2 : 1;
+    // 三级比例尺分级：
+    // L1 (zoom < 5.45): 只显示 13 个骨架小圆点，且仅 6 个战略节点常显精简地名
+    // L2 (5.45 <= zoom < 6.75): 显示一/二级节点图标，展开 13 个骨架节点名称（及高优先级二级节点名称）
+    // L3 (zoom >= 6.75): 三级节点图标与名称全部参与防重叠排布
+    const isL1 = this.zoom < 5.45;
+    const maxIconTier = this.zoom >= 6.75 ? 3 : this.zoom >= 5.45 ? 2 : 1;
+    const maxLabelTier = this.zoom >= 6.75 ? 3 : this.zoom >= 5.85 ? 2 : 1;
     const width = this.map.getContainer().clientWidth || 1280;
 
     const occupied: Box[] = [];
@@ -177,6 +192,7 @@ export class NodeLayer {
 
       item.el.classList.toggle('is-hidden', hiddenByKind);
       item.el.classList.toggle('is-collapsed', collapsed);
+      item.el.classList.toggle('is-compact', isL1 && !isSelected);
 
       if (hiddenByKind || collapsed) {
         item.el.classList.remove('is-label-shown');
@@ -184,11 +200,13 @@ export class NodeLayer {
       }
 
       const pt = this.map.project(item.node.coord);
-      // 先占据图标圆点自身的碰撞盒，避免其他节点的文字压住图标
-      occupied.push({ x0: pt.x - 12, y0: pt.y - 11, x1: pt.x + 12, y1: pt.y + 11 });
+      occupied.push({ x0: pt.x - 11, y0: pt.y - 10, x1: pt.x + 11, y1: pt.y + 10 });
 
       const isFuture = item.el.classList.contains('is-future');
-      if (isSelected || item.tier <= maxLabelTier) {
+      const eligibleAtL1 = MACRO_LABEL_IDS.has(item.node.id);
+      const labelEligible = isSelected || (isL1 ? eligibleAtL1 : item.tier <= maxLabelTier);
+
+      if (labelEligible) {
         candidates.push({ item, cx: pt.x, cy: pt.y, isFuture, isSelected });
       } else {
         item.el.classList.remove('is-label-shown');

@@ -29,6 +29,7 @@ export class OverviewEnemyLayer {
   private labelPool: { key: string; marker: Marker; el: HTMLDivElement }[] = [];
   private enabled = true;
   private inSituationMode = false;
+  private suppressedByScene = false;
   private lastTs = parseLooseDate('1934-10-10');
 
   constructor(private map: MlMap) {
@@ -109,6 +110,8 @@ export class OverviewEnemyLayer {
         this.labelPool.push({ key, marker, el });
       });
     }
+
+    this.map.on('zoom', () => this.render());
   }
 
   private weightAt(c: PreparedCampaign, ts: number): number {
@@ -137,12 +140,23 @@ export class OverviewEnemyLayer {
     this.render();
   }
 
+  /** 当动态战役场景正在演播对应战区态势时，自动让出画面，避免静态宏观层与动态战术箭头重叠 */
+  setSceneActive(active: boolean) {
+    if (this.suppressedByScene === active) return;
+    this.suppressedByScene = active;
+    this.render();
+  }
+
   get isEnabled() {
     return this.enabled;
   }
 
   private render() {
-    const visible = this.enabled && !this.inSituationMode;
+    const z = this.map.getZoom();
+    // 小比例尺（zoom < 5.5）隐藏敌军文字药丸并降低图形权重，突出红军路线主轴
+    const showLabels = z >= 5.5;
+    const scaleFactor = z < 5.45 ? 0.55 : 1;
+    const visible = this.enabled && !this.inSituationMode && !this.suppressedByScene;
     if (!visible) {
       (this.map.getSource('enemy-ov-polygons') as GeoJSONSource | undefined)?.setData(empty);
       (this.map.getSource('enemy-ov-lines') as GeoJSONSource | undefined)?.setData(empty);
@@ -160,14 +174,16 @@ export class OverviewEnemyLayer {
     for (const c of this.prepared) {
       const w = this.weightAt(c, this.lastTs);
       if (w <= 0.02) continue;
-      const eased = w * w * (3 - 2 * w); // smoothstep
+      const eased = w * w * (3 - 2 * w) * scaleFactor;
       for (const f of c.polygons) {
         polys.push({ ...f, properties: { ...(f.properties ?? {}), alpha: eased } });
       }
       for (const f of c.lines) {
         lines.push({ ...f, properties: { ...(f.properties ?? {}), alpha: eased } });
       }
-      c.labels.forEach((_, idx) => alphaByKey.set(`${c.id}-${idx}`, eased));
+      if (showLabels) {
+        c.labels.forEach((_, idx) => alphaByKey.set(`${c.id}-${idx}`, eased));
+      }
     }
 
     (this.map.getSource('enemy-ov-polygons') as GeoJSONSource | undefined)?.setData({

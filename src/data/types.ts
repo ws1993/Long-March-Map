@@ -186,15 +186,85 @@ export interface SituationPhase {
   source?: SourceRef[];
 }
 
-/** 标绘图形定义 */
+/** 标绘图形定义（anim 为阶段内归一化生长时间窗 [start, end] ∈ [0, 1]） */
 export type PlotGraphic =
-  | { id: string; kind: 'arrow'; side: 'red' | 'enemy'; path: LonLat[]; style: ArrowPlotStyle; label?: string; labelAt?: LonLat }
-  | { id: string; kind: 'pincer'; side: 'red' | 'enemy'; start: LonLat; end: LonLat; style: ArrowPlotStyle & { spreadRatio?: number }; label?: string }
-  | { id: string; kind: 'assemble'; side: 'red' | 'enemy'; center: LonLat; radiusX: number; radiusY: number; rotation?: number; label?: string }
-  | { id: string; kind: 'defense'; side: 'red' | 'enemy'; path: LonLat[]; toothSize: number; toothSide?: 1 | -1; label?: string }
-  | { id: string; kind: 'block'; side: 'red' | 'enemy'; center: LonLat; size: number; rotation?: number; label?: string }
-  | { id: string; kind: 'markLine'; side: 'red' | 'enemy'; path: LonLat[]; label?: string; dashed?: boolean }
-  | { id: string; kind: 'text'; side: 'red' | 'enemy'; coord: LonLat; text: string; size?: number };
+  | {
+      id: string;
+      kind: 'arrow';
+      side: 'red' | 'enemy';
+      path: LonLat[];
+      style: ArrowPlotStyle;
+      label?: string;
+      labelAt?: LonLat;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'pincer';
+      side: 'red' | 'enemy';
+      start: LonLat;
+      end: LonLat;
+      style: ArrowPlotStyle & { spreadRatio?: number };
+      label?: string;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'assemble';
+      side: 'red' | 'enemy';
+      center: LonLat;
+      radiusX: number;
+      radiusY: number;
+      rotation?: number;
+      label?: string;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'defense';
+      side: 'red' | 'enemy';
+      path: LonLat[];
+      toothSize: number;
+      toothSide?: 1 | -1;
+      label?: string;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'block';
+      side: 'red' | 'enemy';
+      center: LonLat;
+      size: number;
+      rotation?: number;
+      label?: string;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'markLine';
+      side: 'red' | 'enemy';
+      path: LonLat[];
+      label?: string;
+      dashed?: boolean;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'text';
+      side: 'red' | 'enemy';
+      coord: LonLat;
+      text: string;
+      size?: number;
+      anim?: [number, number];
+    }
+  | {
+      id: string;
+      kind: 'clash';
+      side: 'red' | 'enemy';
+      coord: LonLat;
+      label?: string;
+      anim?: [number, number];
+    };
 
 export interface ArrowPlotStyle {
   /** 箭身宽度（米） */

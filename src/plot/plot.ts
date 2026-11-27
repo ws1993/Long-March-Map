@@ -1,17 +1,13 @@
 /**
- * 军事态势标绘（Plot）几何库 —— maplibre 自绘方案的核心实现。
+ * 军事态势标绘（Plot）几何库 —— 支持 `progress ∈ [0, 1]` 渐进生长动画。
  *
  * 支持图形：
- *   attackArrow   进攻箭头（多点曲线箭身 + 三角箭头，可设燕尾收窄）
- *   doubleArrow   钳击/合围双箭头（两翼对称合击）
- *   assembleArea  部队集结地（旋转椭圆，可带兵力注记）
- *   defenseLine   防御阵地（折线 + 朝敌一侧的锯齿）
- *   axisLine      行动轴线（细虚线，带箭头）
+ *   attackArrow   进攻箭头（沿平滑曲线按弧长从起点向尖端渐进伸展）
+ *   pincerArrows  钳击/合围双箭头（两翼同步外弧包抄合拢）
+ *   assembleArea  部队集结地（旋转椭圆）
+ *   defenseLine   防御阵地（折线 + 朝敌一侧锯齿，可沿防线逐段展开）
  *   blockPoint    阻击/伏击点（菱形钳口）
- *
- * 设计取舍：本项目态势图是"史料静态回放"，图形参数全部预定义在 JSON 里，
- * 不需要用户交互式绘点。因此只实现几何生成 + GeoJSON 输出，不实现编辑交互，
- * 也就不必引入 ol-plot 的 OL 控件体系（详见 docs/00-tech-stack.md）。
+ *   sliceLine     行动轴线/合围虚线按弧长渐进闭合
  */
 import {
   type LonLat,
@@ -46,24 +42,68 @@ export interface ArrowStyle {
   smooth?: number;
 }
 
-/** 进攻箭头：沿路径生成带宽度渐变的箭身，末端接三角箭头 */
-export function attackArrow(pathLL: LonLat[], style: ArrowStyle): LonLat[] {
-  const { width, headWidth = width * 2.6, headLength = width * 3.4, tailTaper = 0.5, smooth = 2 } = style;
-  const path = fromLL(pathLL);
-  if (path.length < 2) return [];
+/** 按归一化弧长比例 progress ∈ (0, 1] 截取投影折线 */
+function sliceProjected(pts: Pt[], progress: number): Pt[] {
+  if (pts.length < 2) return pts;
+  if (progress >= 0.999) return pts;
+  if (progress <= 0.015) return [];
+  const cum = cumulative(pts);
+  const total = cum[cum.length - 1];
+  if (total < 1) return [];
+  const target = total * progress;
+  const out: Pt[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    if (cum[i] < target) {
+      out.push(pts[i]);
+    } else {
+      out.push(pointAt(pts, cum, target));
+      break;
+    }
+  }
+  return dedupe(out);
+}
 
-  let pts = smoothPath(path, smooth);
+/** 经纬度折线按弧长比例截断（供合围虚线渐进闭合动画使用） */
+export function sliceLineLL(pathLL: LonLat[], progress = 1): LonLat[] {
+  if (progress >= 0.999) return pathLL;
+  const sliced = sliceProjected(fromLL(pathLL), progress);
+  return sliced.length >= 2 ? toLL(sliced) : [];
+}
+
+/** 取折线在归一化弧长位置处的点（用于箭头生长过程中锚定标签或前锋） */
+export function pointAlongLL(pathLL: LonLat[], ratio = 0.5): LonLat | null {
+  if (pathLL.length === 0) return null;
+  if (pathLL.length === 1) return pathLL[0];
+  const pts = fromLL(pathLL);
+  const cum = cumulative(pts);
+  const p = pointAt(pts, cum, cum[cum.length - 1] * Math.max(0, Math.min(1, ratio)));
+  return toLL([p])[0];
+}
+
+/** 进攻箭头：先对全路径平滑再按 progress 截取弧长，保证生长过程中轨迹曲率稳定不抖动 */
+export function attackArrow(pathLL: LonLat[], style: ArrowStyle, progress = 1): LonLat[] {
+  if (progress <= 0.025) return [];
+  const { width, headWidth = width * 2.6, headLength = width * 3.4, tailTaper = 0.5, smooth = 2 } = style;
+  const raw = fromLL(pathLL);
+  if (raw.length < 2) return [];
+
+  const fullSmooth = smoothPath(raw, smooth);
+  const pts = sliceProjected(fullSmooth, Math.min(1, progress));
+  if (pts.length < 2) return [];
+
   const cum = cumulative(pts);
   const total = cum[cum.length - 1];
   if (total < 1) return [];
 
-  // 箭头长度不能超过路径总长的一半，否则缩到 40%
-  const headLen = Math.min(headLength, total * 0.55);
+  // 初生阶段箭头尺寸随当前长度平滑放大，避免刚冒头就顶着巨大三角头
+  const growScale = Math.min(1, 0.45 + 0.55 * progress);
+  const effWidth = width * growScale;
+  const effHeadWidth = headWidth * growScale;
+  const headLen = Math.min(headLength * growScale, total * 0.55);
   const shaftEnd = Math.max(0, total - headLen);
 
-  // 1) 箭身：从起点到 shaftEnd，宽度由 tailTaper → 1 线性过渡
   const shaftPts: Pt[] = [];
-  const step = Math.max(width * 0.35, total / 240);
+  const step = Math.max(effWidth * 0.35, total / 200);
   for (let i = 0; i < pts.length; i++) {
     if (cum[i] <= shaftEnd) shaftPts.push(pts[i]);
   }
@@ -77,29 +117,30 @@ export function attackArrow(pathLL: LonLat[], style: ArrowStyle): LonLat[] {
   const nDense = dense.length;
   for (let i = 0; i < nDense; i++) {
     const t = nDense === 1 ? 1 : i / (nDense - 1);
-    const halfW = (width / 2) * (tailTaper + (1 - tailTaper) * t);
+    const halfW = (effWidth / 2) * (tailTaper + (1 - tailTaper) * t);
     const n = leftNormal(tgn[i]);
     leftSide.push(add(dense[i], scale(n, halfW)));
     rightSide.push(add(dense[i], scale(n, -halfW)));
   }
 
-  // 2) 箭头：在箭身末端向外扩到 headWidth/2，再收到路径终点
   const tip = pts[pts.length - 1];
   const tipTangent = tangents([dense[nDense - 1], tip])[1] ?? tgn[nDense - 1];
   const nTip = leftNormal(tipTangent);
-  const wingL = add(endPt, scale(nTip, headWidth / 2));
-  const wingR = add(endPt, scale(nTip, -headWidth / 2));
+  const wingL = add(endPt, scale(nTip, effHeadWidth / 2));
+  const wingR = add(endPt, scale(nTip, -effHeadWidth / 2));
 
   const poly = [...leftSide, wingL, tip, wingR, ...rightSide.slice().reverse()];
   return toLL(dedupe(ensureCCW(poly)));
 }
 
-/** 钳击 / 合围双箭头：从起点向两侧张开，两翼在目标点附近合拢 */
+/** 钳击 / 合围双箭头：两翼随 progress 同步向外弧展开并在目标点合拢 */
 export function pincerArrows(
   startLL: LonLat,
   endLL: LonLat,
   style: ArrowStyle & { spread?: number; spreadRatio?: number },
+  progress = 1,
 ): LonLat[][] {
+  if (progress <= 0.025) return [];
   const { width, spread, spreadRatio = 0.42, headWidth = width * 2.4, headLength = width * 3 } = style;
   const a = project(startLL);
   const b = project(endLL);
@@ -112,16 +153,25 @@ export function pincerArrows(
 
   const out: LonLat[][] = [];
   for (const sign of [1, -1]) {
-    // 控制点：轴线中段向一侧偏移，形成外弧
     const ctrl = add(add(a, scale(dir, L * 0.45)), scale(n, sign * spreadDist));
-    const curve = quadBezier(a, ctrl, b, 64);
-    out.push(attackArrow(toLL(curve), { width, headWidth, headLength, tailTaper: 0.25 }));
+    const curve = quadBezier(a, ctrl, b, 56);
+    const ring = attackArrow(toLL(curve), { width, headWidth, headLength, tailTaper: 0.25, smooth: 0 }, progress);
+    if (ring.length > 2) out.push(ring);
   }
   return out;
 }
 
-/** 部队集结地：旋转椭圆 */
-export function assembleArea(centerLL: LonLat, radiusX: number, radiusY: number, rotationDeg = 0, segments = 48): LonLat[] {
+/** 部队集结地：旋转椭圆（可随 progress 微幅展开） */
+export function assembleArea(
+  centerLL: LonLat,
+  radiusX: number,
+  radiusY: number,
+  rotationDeg = 0,
+  segments = 48,
+  progress = 1,
+): LonLat[] {
+  if (progress <= 0.02) return [];
+  const k = 0.72 + 0.28 * Math.min(1, progress);
   const c = project(centerLL);
   const r = (rotationDeg * Math.PI) / 180;
   const cos = Math.cos(r);
@@ -129,17 +179,23 @@ export function assembleArea(centerLL: LonLat, radiusX: number, radiusY: number,
   const pts: Pt[] = [];
   for (let i = 0; i < segments; i++) {
     const a = (i / segments) * Math.PI * 2;
-    const x = Math.cos(a) * radiusX;
-    const y = Math.sin(a) * radiusY;
-    pts.push({ x: c.x + x * cos - y * sin, y: c.y + x * sin + y * cos });
+    const x = Math.cos(a) * radiusX * k;
+    const y = Math.sin(a) * radiusY * k;
+    pts.push({ x: c.x + x * cos - y * sin, y: c.y + pY(x, y, cos, sin) });
   }
   return toLL(ensureCCW(pts));
 }
 
-/** 防御阵地：折线 + 朝敌（右侧）的锯齿 */
-export function defenseLine(pathLL: LonLat[], toothSize: number, side: 1 | -1 = 1): LonLat[] {
-  // 采样步长必须明显小于齿宽，否则短防线上只会出现一两个孤立的齿
-  const pts = resample(fromLL(pathLL), Math.max(toothSize * 0.85, 600));
+function pY(x: number, y: number, cos: number, sin: number): number {
+  return x * sin + y * cos;
+}
+
+/** 防御阵地：折线 + 朝敌一侧锯齿，随 progress 沿防线逐段铺开 */
+export function defenseLine(pathLL: LonLat[], toothSize: number, side: 1 | -1 = 1, progress = 1): LonLat[] {
+  if (progress <= 0.03) return [];
+  const sliced = sliceProjected(fromLL(pathLL), Math.min(1, progress));
+  if (sliced.length < 2) return [];
+  const pts = resample(sliced, Math.max(toothSize * 0.85, 600));
   if (pts.length < 2) return [];
   const tgn = tangents(pts);
   const outline: Pt[] = [];
@@ -153,7 +209,6 @@ export function defenseLine(pathLL: LonLat[], toothSize: number, side: 1 | -1 = 
       outline.push(add(mid, scale(nMid, side * toothSize * 0.18)));
     }
   }
-  // 回程沿另一侧闭合
   for (let i = pts.length - 1; i >= 0; i--) {
     const n = leftNormal(tgn[i]);
     outline.push(add(pts[i], scale(n, -side * toothSize * 0.18)));
@@ -162,16 +217,19 @@ export function defenseLine(pathLL: LonLat[], toothSize: number, side: 1 | -1 = 
 }
 
 /** 阻击 / 伏击点：菱形钳口 */
-export function blockPoint(centerLL: LonLat, size: number, rotationDeg = 0): LonLat[] {
+export function blockPoint(centerLL: LonLat, size: number, rotationDeg = 0, progress = 1): LonLat[] {
+  if (progress <= 0.02) return [];
+  const k = 0.6 + 0.4 * Math.min(1, progress);
   const c = project(centerLL);
   const r = (rotationDeg * Math.PI) / 180;
   const cos = Math.cos(r);
   const sin = Math.sin(r);
+  const s = size * k;
   const raw: Pt[] = [
-    { x: 0, y: size * 0.95 },
-    { x: size * 0.5, y: 0 },
-    { x: 0, y: -size * 0.95 },
-    { x: -size * 0.5, y: 0 },
+    { x: 0, y: s * 0.95 },
+    { x: s * 0.5, y: 0 },
+    { x: 0, y: -s * 0.95 },
+    { x: -s * 0.5, y: 0 },
   ];
   const pts = raw.map((p) => ({ x: c.x + p.x * cos - p.y * sin, y: c.y + p.x * sin + p.y * cos }));
   return toLL(ensureCCW(pts));
@@ -193,7 +251,6 @@ function smoothPath(path: Pt[], iterations: number): Pt[] {
   return cur;
 }
 
-/** 折线上按弧长取点 */
 function pointAt(pts: Pt[], cum: number[], s: number): Pt {
   if (s <= 0) return pts[0];
   const total = cum[cum.length - 1];

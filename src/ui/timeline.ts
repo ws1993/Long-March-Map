@@ -17,6 +17,8 @@ export interface TimelineOptions {
   markers: StoryNode[];
   /** 1× 速度下播完整段所需秒数 */
   durationSeconds?: number;
+  /** 可选的场景自适应时间速率倍率（如进入关键战役时放慢时间流速以便看清动态态势） */
+  rateFactorAt?: (tsMs: number, speed: number) => number;
   onDate: (iso: string, tsMs: number, meta: TimelineChangeMeta) => void;
 }
 
@@ -156,7 +158,9 @@ export class Timeline {
       if (!this.playing) return;
       const dt = Math.min(120, t - this.lastFrame);
       this.lastFrame = t;
-      const next = this.current + (dt / durationMs) * this.speed;
+      const curTs = this.toTs(this.current);
+      const sceneRate = this.opts.rateFactorAt ? this.opts.rateFactorAt(curTs, this.speed) : 1;
+      const next = this.current + (dt / durationMs) * this.speed * sceneRate;
       if (next >= 1) {
         this.setValue(1, false);
         this.pause();
@@ -180,6 +184,10 @@ export class Timeline {
 
   get currentDate(): string {
     return new Date(this.toTs(this.current)).toISOString().slice(0, 10);
+  }
+
+  get currentSpeed(): number {
+    return this.speed;
   }
 }
 

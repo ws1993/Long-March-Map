@@ -1,6 +1,6 @@
 /** 节点详情面板渲染 */
 import type { StoryNode } from '../data/types';
-import { NODE_SITUATION_LINKS, situationBundles } from '../data/situations';
+import { NODE_SCENE_LINKS } from '../data/scenes';
 import { KIND_META, escapeHtml } from '../map/nodes';
 
 const CONF_TEXT: Record<string, string> = {
@@ -39,23 +39,20 @@ export function renderNodeDetail(node: StoryNode): string {
     <p class="dt-brief">${escapeHtml(node.brief)}</p>
   `);
 
-  const sitLink = NODE_SITUATION_LINKS[node.id];
-  if (sitLink) {
-    const bIdx = situationBundles.findIndex((b) => b.situation.id === sitLink.bundleId);
-    if (bIdx >= 0) {
-      parts.push(`
-        <button
-          type="button"
-          class="dt-sit-jump"
-          data-sit-bundle="${bIdx}"
-          data-sit-phase="${sitLink.phaseIndex}"
-        >
-          <span class="dt-sit-jump__dot"></span>
-          <span>${escapeHtml(sitLink.buttonLabel)}</span>
-          <span class="dt-sit-jump__arrow" aria-hidden="true">→</span>
-        </button>
-      `);
-    }
+  const sceneLink = NODE_SCENE_LINKS[node.id];
+  if (sceneLink) {
+    parts.push(`
+      <button
+        type="button"
+        class="dt-sit-jump"
+        data-scene-id="${escapeHtml(sceneLink.sceneId)}"
+        data-beat-idx="${sceneLink.beatIndex}"
+      >
+        <span class="dt-sit-jump__dot"></span>
+        <span>${escapeHtml(sceneLink.label)}</span>
+        <span class="dt-sit-jump__arrow" aria-hidden="true">→</span>
+      </button>
+    `);
   }
 
   parts.push(`

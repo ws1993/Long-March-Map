@@ -140,15 +140,15 @@ const GEO_ANNOTATIONS: GeoAnnotation[] = [
   { text: '甘 肃', coord: [104.15, 35.85], kind: 'province' },
   { text: '宁 夏', coord: [106.15, 37.35], kind: 'province' },
 
-  // 关键江河参照
-  { text: '长江', coord: [106.55, 29.55], kind: 'river', rotate: -18 },
-  { text: '金沙江', coord: [101.65, 26.22], kind: 'river', rotate: -15 },
-  { text: '大渡河', coord: [102.02, 29.58], kind: 'river', minZoom: 4.5, rotate: 75 },
-  { text: '赤水河', coord: [105.72, 28.48], kind: 'river', minZoom: 4.9, rotate: -35 },
-  { text: '乌江', coord: [107.62, 27.68], kind: 'river', minZoom: 4.7, rotate: -28 },
-  { text: '湘江', coord: [111.15, 26.38], kind: 'river', minZoom: 4.7, rotate: -65 },
-  { text: '嘉陵江', coord: [106.08, 31.35], kind: 'river', minZoom: 4.8, rotate: 68 },
-  { text: '黄河', coord: [110.35, 36.15], kind: 'river', rotate: 82 },
+  // 关键江河参照（按比例尺分级浮现）
+  { text: '长江', coord: [106.55, 29.55], kind: 'river', minZoom: 4.8, rotate: -18 },
+  { text: '黄河', coord: [110.35, 36.15], kind: 'river', minZoom: 4.8, rotate: 82 },
+  { text: '金沙江', coord: [101.65, 26.22], kind: 'river', minZoom: 5.45, rotate: -15 },
+  { text: '大渡河', coord: [102.02, 29.58], kind: 'river', minZoom: 5.45, rotate: 75 },
+  { text: '乌江', coord: [107.62, 27.68], kind: 'river', minZoom: 5.55, rotate: -28 },
+  { text: '湘江', coord: [111.15, 26.38], kind: 'river', minZoom: 5.55, rotate: -65 },
+  { text: '嘉陵江', coord: [106.08, 31.35], kind: 'river', minZoom: 5.55, rotate: 68 },
+  { text: '赤水河', coord: [105.72, 28.48], kind: 'river', minZoom: 6.3, rotate: -35 },
 ];
 
 const ARMY_BADGE_NAME: Record<string, string> = {
@@ -242,11 +242,15 @@ export class RouteLabelLayer {
 
   private syncVisibility() {
     const z = this.map.getZoom();
+    const isL1 = z < 5.45;
 
     for (const item of this.routeItems) {
-      const zoomOk = item.spec.minZoom === undefined || z >= item.spec.minZoom;
+      // 小比例尺仅显示每军的主锚点（无 minZoom 的 4 处），且收起副标题行；中大比例尺展开分段锚点
+      const minZ = item.spec.minZoom !== undefined ? Math.max(5.55, item.spec.minZoom) : undefined;
+      const zoomOk = minZ === undefined || z >= minZ;
       const show = !this.situationMode && this.visibleArmies.has(item.spec.armyId) && zoomOk;
       item.el.classList.toggle('is-off', !show);
+      item.el.classList.toggle('is-compact', isL1);
     }
 
     for (const g of this.geoItems) {
@@ -263,8 +267,12 @@ export class RouteLabelLayer {
   }
 
   private layoutHeadBadges() {
+    const z = this.map.getZoom();
+    const isL1 = z < 5.45;
     const activeByArmy = new Map<string, RouteHead>();
     for (const h of this.latestHeads) {
+      // 小比例尺下已抵达终点的部队隐藏行军挂签（终点已有会师锚点），避免全国视野末端堆叠
+      if (isL1 && h.status === 'arrived') continue;
       if (!this.situationMode && this.visibleArmies.has(h.army.id)) {
         activeByArmy.set(h.army.id, h);
       }
@@ -282,6 +290,7 @@ export class RouteLabelLayer {
 
       entry.el.classList.remove('is-hidden');
       entry.el.classList.toggle('is-arrived', h.status === 'arrived');
+      entry.el.classList.toggle('is-compact', isL1);
       const stageText = compactStageLabel(h.label);
       if (entry.stageEl.textContent !== stageText) {
         entry.stageEl.textContent = stageText;

@@ -1807,3 +1807,643 @@ body.lm-mode-situation .lm-layers {
   color: rgba(102, 178, 204, 0.62);
   text-shadow: 0 0 6px rgba(4, 9, 14, 0.95);
 }
+
+/* ==========================================================================
+   三级比例尺控量（L1 小比例尺精简 / L2 战区展开 / L3 战术全开）
+   ========================================================================== */
+
+.lm-scale-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 13px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: rgba(10, 15, 22, 0.72);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
+/* L1 小比例尺下：收起节点类型小徽章、路线副标题、行军头长串阶段文字，让红军路线成为唯一视觉焦点 */
+.lm-node.is-compact .lm-node__dot {
+  width: 17px;
+  height: 17px;
+  box-shadow: 0 0 0 2px rgba(8, 11, 16, 0.6), 0 0 10px -2px var(--node-color);
+}
+
+.lm-node.is-compact .lm-node__dot svg {
+  width: 10px;
+  height: 10px;
+}
+
+.lm-node.is-compact .lm-node__tag {
+  display: none;
+}
+
+.lm-node.is-compact .lm-node__label {
+  padding: 1.5px 6px;
+  font-size: 10.5px;
+  background: rgba(7, 11, 16, 0.74);
+}
+
+.lm-route-label.is-compact .lm-route-label__text em {
+  display: none;
+}
+
+.lm-route-label.is-compact .lm-route-label__text {
+  padding: 2px 6px;
+}
+
+.lm-head-badge.is-compact .lm-head-badge__stage {
+  display: none;
+}
+
+#app[data-scale='l1'] .lm-geo-label--province {
+  opacity: 0.72;
+  font-size: 12px;
+}
+
+/* ==========================================================================
+   战略重镇与战术要隘地标层（贵阳、昆明、泸州、宜宾、松潘等）
+   ========================================================================== */
+
+.maplibregl-marker:has(> .lm-landmark) {
+  z-index: 4;
+}
+
+.maplibregl-marker:has(> .lm-landmark.is-spotlight) {
+  z-index: 11;
+}
+
+.lm-landmark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  cursor: help;
+  transition: opacity 0.28s var(--ease);
+}
+
+.lm-landmark.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 城池靶标：双环方圆标记，与红军实心圆形节点形成清晰形状区分 */
+.lm-landmark__glyph {
+  position: relative;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  transform: rotate(45deg);
+  background: rgba(12, 18, 26, 0.92);
+  border: 1.5px solid #8eb2d5;
+  box-shadow: 0 0 0 2px rgba(6, 10, 15, 0.75);
+  transition: all 0.28s var(--ease);
+}
+
+.lm-landmark--tactical .lm-landmark__glyph {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  border-color: rgba(142, 178, 213, 0.72);
+}
+
+.lm-landmark__glyph::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 1px;
+  background: #8eb2d5;
+}
+
+.lm-landmark--tactical .lm-landmark__glyph::after {
+  display: none;
+}
+
+/* 战役特写聚光状态（如奇袭贵阳、佯逼昆明、松潘受阻） */
+.lm-landmark.is-spotlight .lm-landmark__glyph {
+  width: 14px;
+  height: 14px;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(240, 183, 62, 0.24), 0 0 18px 2px rgba(240, 183, 62, 0.75);
+}
+
+.lm-landmark.is-spotlight[data-tone='fortress'] .lm-landmark__glyph {
+  border-color: #7fb6ec;
+  box-shadow: 0 0 0 3px rgba(127, 182, 236, 0.24), 0 0 16px 1px rgba(127, 182, 236, 0.7);
+}
+
+.lm-landmark.is-spotlight .lm-landmark__glyph::after {
+  background: var(--gold);
+}
+
+.lm-landmark.is-spotlight[data-tone='fortress'] .lm-landmark__glyph::after {
+  background: #7fb6ec;
+}
+
+.lm-landmark__body {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translate(7px, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(8, 13, 20, 0.84);
+  border: 1px solid rgba(142, 178, 213, 0.26);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.lm-landmark--tactical:not(.is-spotlight) .lm-landmark__body {
+  padding: 1px 5px;
+  background: rgba(8, 13, 20, 0.68);
+  border-color: rgba(142, 178, 213, 0.15);
+}
+
+.lm-landmark--anchor-left .lm-landmark__body {
+  left: auto;
+  right: 100%;
+  transform: translate(-7px, -50%);
+  text-align: right;
+}
+
+.lm-landmark--anchor-top .lm-landmark__body {
+  left: 50%;
+  top: auto;
+  bottom: 100%;
+  transform: translate(-50%, -6px);
+  text-align: center;
+}
+
+.lm-landmark--anchor-bottom .lm-landmark__body {
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 6px);
+  text-align: center;
+}
+
+.lm-landmark__name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #d6e6f6;
+  letter-spacing: 0.05em;
+}
+
+.lm-landmark--tactical:not(.is-spotlight) .lm-landmark__name {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: #aebfd1;
+}
+
+.lm-landmark.is-spotlight .lm-landmark__body {
+  border-color: rgba(240, 183, 62, 0.55);
+  background: rgba(15, 16, 18, 0.92);
+  box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.95);
+}
+
+.lm-landmark.is-spotlight[data-tone='fortress'] .lm-landmark__body {
+  border-color: rgba(127, 182, 236, 0.52);
+}
+
+.lm-landmark.is-spotlight .lm-landmark__name {
+  color: #ffe29a;
+  font-size: 12px;
+}
+
+.lm-landmark.is-spotlight[data-tone='fortress'] .lm-landmark__name {
+  color: #cde4ff;
+}
+
+.lm-landmark__note {
+  display: none;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--ink-mid);
+  letter-spacing: 0.02em;
+}
+
+.lm-landmark.has-note .lm-landmark__note {
+  display: block;
+}
+
+.lm-legend__swatch--landmark {
+  width: 9px;
+  height: 9px;
+  margin: 0 2px;
+  border-radius: 2px;
+  transform: rotate(45deg);
+  border: 1.5px solid var(--gold);
+  background: rgba(240, 183, 62, 0.25);
+}
+
+.lm-linekey__sample--landmark {
+  width: 9px;
+  height: 9px;
+  margin: 0 6.5px;
+  border-top: 0;
+  border-radius: 2px;
+  transform: rotate(45deg);
+  border: 1.5px solid #8eb2d5;
+  background: rgba(142, 178, 213, 0.22);
+}
+
+/* ==========================================================================
+   激战脉冲波纹点（Clash Shockwave Marker）
+   ========================================================================== */
+
+.maplibregl-marker:has(> .lm-clash) {
+  z-index: 10;
+}
+
+.lm-clash {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  transition: opacity 0.25s var(--ease);
+}
+
+.lm-clash.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.lm-clash__ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 120, 90, 0.85);
+  animation: clashWave 1.7s var(--ease-out) infinite;
+}
+
+@keyframes clashWave {
+  0% {
+    transform: scale(0.45);
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+.lm-clash__core {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle, #ff7a59, #c82d26);
+  color: #fff6e5;
+  border: 1.5px solid #ffd8be;
+  box-shadow: 0 0 18px 2px rgba(240, 87, 79, 0.85);
+}
+
+.lm-clash__core svg {
+  width: 11px;
+  height: 11px;
+}
+
+.lm-clash__label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translate(-50%, 4px);
+  padding: 1.5px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #ffe4dc;
+  background: rgba(42, 14, 14, 0.9);
+  border: 1px solid rgba(255, 130, 110, 0.55);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.9);
+}
+
+.sit-label.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+}
+
+/* ==========================================================================
+   六大战役场景芯片条 + 悬浮剧场 HUD 卡 + 镜头跟随开关
+   ========================================================================== */
+
+.lm-scene-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 11px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.lm-scene-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.lm-scene-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(126, 158, 190, 0.22);
+  background: rgba(11, 17, 25, 0.78);
+  backdrop-filter: blur(12px);
+  color: var(--ink-mid);
+  font-family: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.22s var(--ease);
+}
+
+.lm-scene-chip:hover {
+  border-color: rgba(240, 87, 79, 0.55);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.lm-scene-chip.is-active {
+  border-color: rgba(240, 87, 79, 0.85);
+  background: linear-gradient(135deg, rgba(224, 68, 62, 0.32), rgba(45, 18, 20, 0.9));
+  color: #ffdfdb;
+  box-shadow: 0 0 20px -6px rgba(224, 68, 62, 0.85);
+}
+
+.lm-scene-chip__num {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--red-soft);
+  font-weight: 600;
+}
+
+.lm-scene-chip.is-active .lm-scene-chip__num {
+  color: var(--gold);
+}
+
+.lm-timeline__controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lm-follow-btn {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(12, 18, 26, 0.78);
+  color: var(--ink-dim);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s var(--ease);
+}
+
+.lm-follow-btn.is-on {
+  border-color: rgba(95, 195, 207, 0.45);
+  color: #b7eef5;
+  background: rgba(20, 44, 54, 0.65);
+}
+
+.lm-follow-btn.is-detached {
+  border-color: rgba(240, 183, 62, 0.68);
+  color: #ffe39e;
+  background: rgba(52, 38, 12, 0.78);
+  box-shadow: 0 0 16px -5px rgba(240, 183, 62, 0.75);
+}
+
+/* 右上角战役场景悬浮剧场面板 */
+.lm-scene-hud {
+  position: absolute;
+  top: 84px;
+  right: 24px;
+  width: min(368px, 90vw);
+  z-index: 21;
+  padding: 15px 17px;
+  border-radius: 14px;
+  background: rgba(9, 14, 21, 0.88);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(224, 68, 62, 0.34);
+  box-shadow: var(--shadow-panel), 0 0 36px -18px rgba(224, 68, 62, 0.65);
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+  transition: opacity 0.32s var(--ease), transform 0.32s var(--ease-out);
+}
+
+.lm-scene-hud.is-open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.sc-hud__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sc-hud__badge {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.sc-hud__top-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.sc-hud__mini {
+  padding: 2.5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(126, 158, 190, 0.08);
+  color: var(--ink-mid);
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: all 0.18s var(--ease);
+}
+
+.sc-hud__mini:hover {
+  border-color: var(--border-hi);
+  color: #fff;
+}
+
+.sc-hud__title {
+  margin: 7px 0 10px;
+  font-family: var(--serif);
+  font-size: 18px;
+  letter-spacing: 0.05em;
+  color: #f6fafd;
+}
+
+.sc-hud__forces {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: rgba(6, 10, 15, 0.65);
+  border: 1px solid var(--border);
+}
+
+.sc-force {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sc-force--enemy {
+  text-align: right;
+}
+
+.sc-force span {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.sc-force strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sc-force--red strong {
+  color: #ff9891;
+}
+
+.sc-force--enemy strong {
+  color: #93c2f2;
+}
+
+.sc-hud__vs {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.sc-hud__steps {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  gap: 5px;
+}
+
+.sc-hud__step {
+  position: relative;
+  overflow: hidden;
+  padding: 5px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: rgba(126, 158, 190, 0.06);
+  color: var(--ink-dim);
+  font-family: inherit;
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.sc-hud__step:hover {
+  border-color: var(--border-hi);
+  color: var(--ink);
+}
+
+.sc-hud__step.is-on {
+  border-color: rgba(240, 87, 79, 0.65);
+  color: #fff;
+  background: rgba(224, 68, 62, 0.14);
+}
+
+.sc-hud__step-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--red-soft);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.sc-hud__step-txt {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-hud__beat {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+
+.sc-hud__beat-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sc-hud__date {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--red-soft);
+  font-weight: 600;
+}
+
+.sc-hud__beat-head strong {
+  font-size: 12.5px;
+  color: #f2f7fc;
+}
+
+.sc-hud__caption {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.68;
+  color: var(--ink-mid);
+}
+
+@media (max-width: 900px) {
+  .lm-scale-pill {
+    display: none;
+  }
+  .lm-scene-hud {
+    top: 66px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
+  .lm-follow-btn {
+    padding: 4px 9px;
+    font-size: 10.5px;
+  }
+}
