@@ -23,28 +23,31 @@ src/
     types.ts               数据模型：Army / RouteSegment / StoryNode / Situation
     armies.ts              四支队伍的元信息
     routes.ts              30 段行军路线（含途经点与日期）
+    landmarks.ts           28 处战略参照重镇（贵阳、昆明、泸州、松潘等）与战役渡口要隘
+    scenes.ts              六大核心战役动态场景剧本与节点跳转映射
     enemy-overview.ts      总览主图随时间轴联动的 8 组国民党军围追堵截态势
     nodes-central.ts       红一方面军 33 个节点
     nodes-others.ts        其他三支队伍 + 三大主力会师 + 诗词 17 个节点
     situations/
-      index.ts             态势图登记表与关键节点跳转映射
-      xiangjiang.ts        湘江战役态势：三大阻击战、4 个阶段的标绘
-      sidu-chishui.ts      四渡赤水态势：双方兵力、5 个阶段的标绘
-      jinsha-dadu.ts       巧渡金沙江·飞夺泸定桥态势：4 个阶段的标绘
-  plot/                    标绘几何库（纯函数，与地图引擎无耦合）
+      index.ts             水系与战役史料登记表
+      xiangjiang.ts        湘江战役史料与水系
+      sidu-chishui.ts      四渡赤水史料与水系
+      jinsha-dadu.ts       巧渡金沙江·飞夺泸定桥史料与水系
+  plot/                    标绘几何库（纯函数，支持 progress 0→1 渐进生长动画）
     geo.ts                 投影、重采样、切线法向、平滑、贝塞尔
-    plot.ts                进攻箭头、钳击箭头、集结地、防御阵地、阻击点
+    plot.ts                进攻箭头、钳击箭头、集结地、防御阵地、阻击点动态生成
   map/                     地图图层装配
     basemap.ts             底图样式（地形 + 省界 + 河流）
     routes.ts              路线连续推进切分（past / lead / future）+ 跳转缓动
-    enemyOverview.ts       总览主图敌军态势层（随时间轴平滑淡入淡出）
-    nodes.ts               DOM 节点标注 + 分级常显与屏幕空间防重叠排布
+    enemyOverview.ts       总览主图敌军态势层（受比例尺与战役剧场协同控制）
+    landmarks.ts           战略重镇与战术要隘图层（三级比例尺 + 场景聚光高亮）
+    nodes.ts               DOM 节点标注 + 三级比例尺控量与屏幕防重叠排布
     routeLabels.ts         多锚点部队注记 + 行军推进实时挂签 + 省区水系注记
-    situation.ts           态势标绘 → GeoJSON
+    situation.ts           战役场景动态标绘与激战脉冲生成 → GeoJSON
   ui/                      界面
-    timeline.ts            时间轴控制器
-    detail.ts              节点详情 / 关于数据
-    situationPanel.ts      态势面板
+    timeline.ts            时间轴控制器（支持战役节拍自适应演播速率）
+    detail.ts              节点详情 / 战役场景跳转 / 关于数据
+    sceneDirector.ts       六大战役场景编排器（镜头自动跟随、人工拖拽让权与剧场 HUD）
   main.ts                  应用装配
   style.css                视觉系统
 

@@ -6,12 +6,12 @@
     <title>红军长征地图 · 二万五千里</title>
     <meta
       name="description"
-      content="红军长征可视化：四支主力部队行军路线、重要会议与战役节点、四渡赤水等敌我作战态势。数据标注来源与置信度。"
+      content="红军长征可视化：四支主力连续行军路线、三级比例尺信息分级、六大战役动态态势剧场与重要战略地标。数据标注来源与置信度。"
     />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <div id="app">
+    <div id="app" data-scale="l1">
       <div id="map" class="lm-map"></div>
 
       <!-- 顶部标识 -->
@@ -22,13 +22,15 @@
           </div>
           <div class="lm-brand__text">
             <h1>红军长征地图</h1>
-            <p>1934.10 — 1936.10 · 四支主力 · 一次改变中国命运的远征</p>
+            <p>1934.10 — 1936.10 · 主线贯通 · 六大战役场景动态推演</p>
           </div>
         </div>
         <nav class="lm-actions">
-          <button class="lm-btn" id="btn-situation" type="button">
-            <span class="lm-btn__dot"></span>作战态势
+          <span class="lm-scale-pill" id="scale-pill" title="缩放地图自动切换信息密度">小比例尺 · 全国总览</span>
+          <button class="lm-btn" id="btn-situation" type="button" title="切入并循环演播核心战役场景">
+            <span class="lm-btn__dot"></span>战役剧场
           </button>
+          <button class="lm-btn lm-btn--ghost" id="btn-overview" type="button" title="回到全国长征走廊总视野">全局总览</button>
           <button class="lm-btn lm-btn--ghost" id="btn-about" type="button">关于数据</button>
         </nav>
       </header>
@@ -41,38 +43,46 @@
         </button>
         <div class="lm-layers__body">
           <section>
-            <h3>部队</h3>
+            <h3>部队主线</h3>
             <div class="lm-legend" id="legend-armies"></div>
           </section>
           <section>
-            <h3>态势与底图注记</h3>
+            <h3>态势与地标</h3>
             <div class="lm-legend" id="legend-extras">
               <div class="lm-legend__item" id="toggle-enemy-ov">
                 <span class="lm-legend__swatch lm-legend__swatch--enemy"></span>
-                <span>国民党军围追态势</span>
-                <span class="lm-legend__count">联动</span>
+                <span>敌我战役与围追态势</span>
+                <span class="lm-legend__count">动态</span>
+              </div>
+              <div class="lm-legend__item" id="toggle-landmarks">
+                <span class="lm-legend__swatch lm-legend__swatch--landmark"></span>
+                <span>战略重镇（贵阳·昆明等）</span>
+                <span class="lm-legend__count">28</span>
               </div>
               <div class="lm-legend__item" id="toggle-geo-labels">
                 <span class="lm-legend__swatch lm-legend__swatch--geo"></span>
-                <span>省区与水系注记</span>
+                <span>省区与水系底纹</span>
                 <span class="lm-legend__count">20</span>
               </div>
             </div>
           </section>
           <section>
-            <h3>节点</h3>
+            <h3>历史节点</h3>
             <div class="lm-legend lm-legend--check" id="legend-kinds"></div>
           </section>
           <section class="lm-linekey">
-            <h3>读图</h3>
-            <p><i class="lm-linekey__sample lm-linekey__sample--past"></i>实线 · 已走路线（连续推进）</p>
+            <h3>比例尺与读图</h3>
+            <p><i class="lm-linekey__sample lm-linekey__sample--past"></i>实线 · 已走主线（连续推进）</p>
             <p><i class="lm-linekey__sample lm-linekey__sample--future"></i>虚线 · 未走路线（前方保留）</p>
-            <p><i class="lm-linekey__sample lm-linekey__sample--head"></i>圆点挂签 · 当前位置与行动阶段</p>
-            <p><i class="lm-linekey__sample lm-linekey__sample--enemy"></i>蓝齿/箭头 · 敌军封锁线与围追</p>
-            <p class="lm-linekey__note">图面直接标出部队路线、骨架节点与实时行动；放大可展开更多地名。</p>
+            <p><i class="lm-linekey__sample lm-linekey__sample--enemy"></i>动态箭头/锯齿 · 敌我态势推演</p>
+            <p><i class="lm-linekey__sample lm-linekey__sample--landmark"></i>双环城标 · 贵阳/昆明等战略支点</p>
+            <p class="lm-linekey__note">小比例尺精简留白突出路线；放大地图或演播下方六大战役场景时，自动展开重镇、渡口与战术动画。</p>
           </section>
         </div>
       </aside>
+
+      <!-- 战役场景剧场悬浮卡（不隐藏主路线与时间轴） -->
+      <aside class="lm-scene-hud" id="scene-hud" aria-hidden="true"></aside>
 
       <!-- 节点详情抽屉 -->
       <aside class="lm-detail" id="detail" aria-hidden="true">
@@ -82,8 +92,9 @@
         <div class="lm-detail__body" id="detail-body"></div>
       </aside>
 
-      <!-- 底部时间轴 -->
+      <!-- 底部时间轴 + 六大战役场景导览芯片 -->
       <footer class="lm-timeline" id="timeline">
+        <div class="lm-scene-strip" id="scene-strip" aria-label="六大核心战役场景直达"></div>
         <div class="lm-timeline__head">
           <button class="lm-play" id="btn-play" type="button" aria-label="播放长征进程">
             <svg class="lm-play__icon" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" /></svg>
@@ -93,11 +104,14 @@
             <span class="lm-clock__date" id="clock-date">1934 年 10 月 10 日</span>
             <span class="lm-clock__sub" id="clock-sub">中央红军自瑞金出发</span>
           </div>
-          <div class="lm-speed">
-            <button type="button" data-speed="0.5">0.5×</button>
-            <button type="button" data-speed="1" class="is-on">1×</button>
-            <button type="button" data-speed="2">2×</button>
-            <button type="button" data-speed="4">4×</button>
+          <div class="lm-timeline__controls">
+            <button type="button" class="lm-follow-btn is-on" id="btn-follow">镜头跟随 · 开</button>
+            <div class="lm-speed">
+              <button type="button" data-speed="0.5">0.5×</button>
+              <button type="button" data-speed="1" class="is-on">1×</button>
+              <button type="button" data-speed="2">2×</button>
+              <button type="button" data-speed="4">4×</button>
+            </div>
           </div>
         </div>
         <div class="lm-track" id="track">
@@ -114,20 +128,6 @@
           />
         </div>
       </footer>
-
-      <!-- 态势面板 -->
-      <section class="lm-situation" id="situation" aria-hidden="true">
-        <div class="lm-situation__bar">
-          <button class="lm-btn lm-btn--ghost" id="sit-back" type="button">← 返回总览</button>
-          <div class="lm-situation__title">
-            <h2 id="sit-title">四渡赤水</h2>
-            <p id="sit-subtitle"></p>
-          </div>
-          <div class="lm-situation__sides" id="sit-sides"></div>
-        </div>
-        <div class="lm-situation__steps" id="sit-steps"></div>
-        <article class="lm-situation__card" id="sit-card"></article>
-      </section>
 
       <!-- 数据说明弹层 -->
       <div class="lm-modal" id="about" aria-hidden="true">
