@@ -1,0 +1,9 @@
+# 只影响 `vercel` CLI 直传；Git 集成部署以仓库提交内容为准
+node_modules
+dist
+.vite
+.pi
+scripts/_raw
+*.local
+.DS_Store
+Thumbs.db

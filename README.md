@@ -15,6 +15,34 @@ npm run typecheck    # 类型检查
 
 > `public/geo/` 里已包含烘焙好的地形底图与简化后的矢量数据，**开箱即用，不需要联网、不需要任何地图 API key**。
 
+## 部署到 Vercel
+
+仓库里已带好 `vercel.json`，Vercel 导入这个 GitHub 仓库后**零配置即可部署**（Framework 识别为 Vite，`npm run build` → `dist/`）。
+
+```bash
+# 方式一：Git 集成（推荐）—— vercel.com → Add New… → Project → 选本仓库 → Deploy
+#   之后每次 push 到 main 自动重新部署，PR 自动生成预览域名
+
+# 方式二：本地 CLI 直传
+npm i -g vercel
+vercel          # 首次：登录 + 关联/新建项目（预览环境）
+vercel --prod   # 发布到生产域名
+```
+
+已配置的部署参数：
+
+| 项 | 值 | 说明 |
+| --- | --- | --- |
+| Build Command | `npm run build` | 含 `tsc --noEmit` 类型门 |
+| Output Directory | `dist` | 纯静态产物，无 Serverless Function |
+| Install Command | `npm ci` | 锁 `package-lock.json`，可复现 |
+| Node | `22.x`（`package.json` → `engines`） | Vite 7 要求 `^20.19 \|\| >=22.12` |
+| `/assets/*` 缓存 | `max-age=31536000, immutable` | 文件名带内容哈希，可永久缓存 |
+| `/geo/*` 缓存 | `1 天` + `stale-while-revalidate=7 天` | 文件名不带哈希，故不设 immutable |
+
+> 无需环境变量、无需地图 API key、无需 Serverless 函数：地形与矢量数据都在 `public/geo/`，完全离线渲染。
+> 若使用 CLI 直传，`.vercelignore` 会跳过 `node_modules` / `dist` / `scripts/_raw`（后者是本机烘焙用的原始 DEM 瓦片，未纳入 Git）。
+
 ## 项目结构
 
 ```

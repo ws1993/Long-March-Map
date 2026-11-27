@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "description": "红军长征可视化地图 — 路线、节点、敌我态势",
+  "engines": {
+    "node": "22.x"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
