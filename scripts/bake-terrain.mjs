@@ -54,6 +54,11 @@ const X1 = Math.ceil(lon2x(LON.max, Z)) - 1;
 const Y0 = Math.floor(lat2y(LAT.max, Z)); // 纬度大 → y 小
 const Y1 = Math.ceil(lat2y(LAT.min, Z)) - 1;
 
+/** 每像素地面距离（米）：必须按 z 与图幅中心纬度推算。
+ *  写死一个值只对某个 z 成立 —— z=10 用 1200 会把坡度低估近 9 倍，山体阴影几乎消失。 */
+const CELL =
+  (40075016.686 * Math.cos((((y2lat(Y0, Z) + y2lat(Y1 + 1, Z)) / 2) * Math.PI) / 180)) / (256 * 2 ** Z);
+
 const COLS = X1 - X0 + 1;
 const ROWS = Y1 - Y0 + 1;
 const W = COLS * 256;
@@ -153,7 +158,7 @@ function hillshadeAt(dem, px, py) {
   const a = at(px - 1, py - 1), b = at(px, py - 1), c = at(px + 1, py - 1);
   const d = at(px - 1, py), f = at(px + 1, py);
   const g = at(px - 1, py + 1), h = at(px, py + 1), i = at(px + 1, py + 1);
-  const cell = 1200; // z7 赤道分辨率约 1222m，中纬度取近似值
+  const cell = CELL;
   const dzdx = (c + 2 * f + i - (a + 2 * d + g)) / (8 * cell);
   const dzdy = (g + 2 * h + i - (a + 2 * b + c)) / (8 * cell);
   const slope = Math.atan(Math.hypot(dzdx, dzdy));
@@ -212,7 +217,13 @@ const ext = REGION ? 'webp' : 'png';
 const name = `terrain-${Z}-${X0}-${Y0}-${X1}-${Y1}${suffix}.${ext}`;
 fs.mkdirSync(OUT, { recursive: true });
 await sharp(rgb, { raw: { width: W, height: H, channels: 4 } })
-  [ext === 'webp' ? 'webp' : 'png'](ext === 'webp' ? { quality: 84, alphaQuality: 90 } : { compressionLevel: 9, palette: false })
+  [ext === 'webp' ? 'webp' : 'png'](
+    ext === 'webp'
+      ? // 地形晕渲是暗色大面积渐变，有损 WebP 会压出 8/16px 的 DCT 块网格（实测块效应 1.2x），
+        // 在暗底上就是肉眼可见的「接边」。near-lossless 把块效应压到 0.995x（与无损同级），体积仍只有 PNG 的 1/3。
+        { nearLossless: true, quality: 60, effort: 6 }
+      : { compressionLevel: 9, palette: false },
+  )
   .toFile(path.join(OUT, name));
 
 const bounds = {
