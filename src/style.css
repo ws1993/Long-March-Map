@@ -173,11 +173,13 @@ body {
 }
 
 @keyframes pulse {
+
   0%,
   100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.55;
     transform: scale(0.82);
@@ -204,7 +206,7 @@ body {
 .lm-layers {
   top: 96px;
   left: 24px;
-  width: 278px;
+  width: 266px;
   overflow: hidden;
 }
 
@@ -235,12 +237,11 @@ body {
 }
 
 .lm-layers__body {
-  padding: 0 14px 14px;
+  padding: 0 8px 12px 14px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 13px;
+  gap: 11px;
   /* 面板随视口长高，常态下不出滚动条；确实超高时才出现，用与面板同调的细滚动条 */
-  max-height: clamp(240px, calc(100vh - 312px), 680px);
+  max-height: clamp(240px, calc(100vh - 308px), 640px);
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -268,7 +269,7 @@ body {
 }
 
 .lm-layers__body section h3 {
-  margin: 0 0 7px;
+  margin: 0 0 6px;
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.16em;
@@ -279,15 +280,14 @@ body {
 
 .lm-legend {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
+  gap: 1px;
 }
 
 .lm-legend__item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 6px;
+  padding: 4px 6px;
   border-radius: 7px;
   font-size: 11px;
   line-height: 1.5;
@@ -1375,7 +1375,7 @@ body {
   letter-spacing: 0.06em;
 }
 
-.lm-modal__body > p {
+.lm-modal__body>p {
   margin: 0 0 20px;
   font-size: 12.5px;
   color: var(--ink-dim);
@@ -1467,7 +1467,7 @@ body {
   backdrop-filter: blur(14px);
 }
 
-.maplibregl-ctrl-group button + button {
+.maplibregl-ctrl-group button+button {
   border-top-color: var(--border) !important;
 }
 
@@ -1510,20 +1510,25 @@ body.lm-mode-situation .lm-layers {
   .lm-layers {
     top: 84px;
     left: 12px;
-    width: 230px;
+    width: 210px;
   }
+
   .lm-topbar {
     padding: 12px 14px;
   }
+
   .lm-brand__text p {
     display: none;
   }
+
   .lm-timeline {
     padding: 12px 14px 16px;
   }
+
   .lm-speed {
     display: none;
   }
+
   .lm-situation__steps {
     position: static;
     transform: none;
@@ -1534,12 +1539,15 @@ body.lm-mode-situation .lm-layers {
     padding: 0 14px;
     margin-top: 76px;
   }
+
   .sit-step {
     min-width: 150px;
   }
+
   .lm-situation__sides {
     display: none;
   }
+
   .lm-situation__card {
     left: 14px;
     right: 14px;
@@ -1608,8 +1616,7 @@ body.lm-mode-situation .lm-layers {
 
 .lm-linekey {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  gap: 3px;
 }
 
 .lm-linekey p {
@@ -1650,26 +1657,24 @@ body.lm-mode-situation .lm-layers {
 .lm-linekey__sample--head {
   height: 20px;
   border-top: 0;
-  background: radial-gradient(
-    circle at center,
-    var(--red) 0 3px,
-    #0b0f14 3px 4.6px,
-    transparent 4.6px
-  );
+  background: radial-gradient(circle at center,
+      var(--red) 0 3px,
+      #0b0f14 3px 4.6px,
+      transparent 4.6px);
 }
 
 .lm-linekey p.lm-linekey__note {
   display: block;
-  margin-top: 5px;
+  margin-top: 4px;
   font-size: 10px;
   line-height: 1.55;
   color: var(--ink-dim);
 }
 
 /* 读图说明排在图层面板最前，避免被部队/节点列表挤出可视区 */
-.lm-layers__body > section.lm-linekey {
+.lm-layers__body>section.lm-linekey {
   order: -1;
-  padding-bottom: 10px;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1864,7 +1869,7 @@ body.lm-mode-situation .lm-layers {
   transition: opacity 0.3s var(--ease);
 }
 
-.lm-geo-label > span {
+.lm-geo-label>span {
   display: inline-block;
 }
 
@@ -2179,6 +2184,7 @@ body.lm-mode-situation .lm-layers {
     transform: scale(0.45);
     opacity: 0.95;
   }
+
   100% {
     transform: scale(1.65);
     opacity: 0;
@@ -2237,6 +2243,86 @@ body.lm-mode-situation .lm-layers {
 }
 
 /* ==========================================================================
+   战役场景专属重要地理地物注记（主角河流 / 天险山脉 / 高原沼泽）
+   ========================================================================== */
+
+.maplibregl-marker:has(> .lm-sc-geo) {
+  z-index: 6;
+}
+
+.lm-sc-geo {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.lm-sc-geo.is-hidden {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.lm-sc-geo__inner {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-weight: 600;
+  text-shadow:
+    0 0 4px rgba(4, 8, 13, 0.99),
+    0 0 10px rgba(4, 8, 13, 0.96),
+    0 1px 3px rgba(0, 0, 0, 0.98),
+    1px 0 2px rgba(4, 8, 13, 0.96),
+    -1px 0 2px rgba(4, 8, 13, 0.96);
+}
+
+.lm-sc-geo__inner i {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.lm-sc-geo__inner[data-align='left'] {
+  transform: translate(0, -50%) rotate(var(--geo-rot, 0deg));
+}
+
+.lm-sc-geo__inner[data-align='right'] {
+  transform: translate(-100%, -50%) rotate(var(--geo-rot, 0deg));
+}
+
+.lm-sc-geo__inner[data-align='center-top'] {
+  transform: translate(-50%, -100%) rotate(var(--geo-rot, 0deg));
+}
+
+.lm-sc-geo__inner[data-align='center-bottom'] {
+  transform: translate(-50%, 0) rotate(var(--geo-rot, 0deg));
+}
+
+.lm-sc-geo--river .lm-sc-geo__inner {
+  font-size: 12px;
+  font-style: italic;
+  letter-spacing: 0.14em;
+  color: #7eeeff;
+}
+
+.lm-sc-geo--mountain .lm-sc-geo__inner {
+  font-family: var(--serif);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  color: #e6d7be;
+}
+
+.lm-sc-geo--marsh .lm-sc-geo__inner {
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: #8ee5d2;
+}
+
+/* ==========================================================================
    六大战役场景芯片条 + 悬浮剧场 HUD 卡 + 镜头跟随开关
    ========================================================================== */
 
@@ -2244,7 +2330,11 @@ body.lm-mode-situation .lm-layers {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 11px;
+  /* overflow-x:auto 会让另一轴的 visible 计算成 auto，整条变成裁切盒：
+     芯片 hover 上浮 1px 与激活态光晕都会被上边缘切掉。
+     这里纵向留出内边距当"呼吸区"，再用负外边距抵消，保持原有排版占位不变。 */
+  padding-block: 10px;
+  margin: -10px 0 1px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -2531,39 +2621,16 @@ body.lm-mode-situation .lm-layers {
   .lm-scale-pill {
     display: none;
   }
+
   .lm-scene-hud {
     top: 66px;
     left: 12px;
     right: 12px;
     width: auto;
   }
+
   .lm-follow-btn {
     padding: 4px 9px;
     font-size: 10.5px;
-  }
-}
-
-/* 笔记本等低视口：回落到紧凑间距，尽量把整份图例留在面板内，不触发滚动 */
-@media (max-height: 940px) {
-  .lm-layers__body {
-    gap: 11px;
-  }
-  .lm-layers__body section h3 {
-    margin: 0 0 6px;
-  }
-  .lm-legend {
-    gap: 1px;
-  }
-  .lm-legend__item {
-    padding: 4px 6px;
-  }
-  .lm-linekey {
-    gap: 3px;
-  }
-  .lm-linekey p.lm-linekey__note {
-    margin-top: 4px;
-  }
-  .lm-layers__body > section.lm-linekey {
-    padding-bottom: 8px;
   }
 }

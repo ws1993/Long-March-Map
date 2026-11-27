@@ -220,10 +220,11 @@ export class RouteLabelLayer {
     const z = this.map.getZoom();
     const isL1 = z < 5.45;
 
-    // 1. 底图省区与主要河流
+    // 1. 底图省区与主要河流（进入战役特写场景时隐去全局河流底纹签，统一由场景专属发光水系注记接管）
     for (const g of this.geoItems) {
       const zoomOk = g.spec.minZoom === undefined || z >= g.spec.minZoom;
-      const show = this.geoEnabled && zoomOk;
+      const suppressedInScene = this.sceneActive && g.spec.kind === 'river';
+      const show = this.geoEnabled && zoomOk && !suppressedInScene;
       g.el.classList.toggle('is-off', !show);
     }
 

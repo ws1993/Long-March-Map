@@ -11,14 +11,25 @@ export interface TimelineChangeMeta {
   jump?: boolean;
 }
 
+/** 播放速率剖面：实际时间推进 = 用户倍速 × time × lock */
+export interface PlaybackRate {
+  /** 段落节奏压缩（历史跨度 → 秒） */
+  time: number;
+  /** 比例尺观感补偿（放大即 < 1，时间放慢以维持屏幕上的恒定观感速度） */
+  lock: number;
+}
+
 export interface TimelineOptions {
   start: string;
   end: string;
   markers: StoryNode[];
   /** 1× 速度下播完整段所需秒数 */
   durationSeconds?: number;
-  /** 可选的场景自适应时间速率倍率（如进入关键战役时放慢时间流速以便看清动态态势） */
-  rateFactorAt?: (tsMs: number, speed: number) => number;
+  /**
+   * 可选的播放速率剖面。time 负责段落节奏，lock 负责比例尺观感补偿：
+   * 放大时 lock < 1 让时间流速放慢，使屏幕上的行进速度与默认视野一致。
+   */
+  rateFactorAt?: (tsMs: number, speed: number) => PlaybackRate;
   onDate: (iso: string, tsMs: number, meta: TimelineChangeMeta) => void;
 }
 
@@ -39,6 +50,10 @@ export class Timeline {
   private clockDate: HTMLElement;
   private clockSub: HTMLElement;
 
+  /** 比例尺观感锁指示器（放大播放时提示时间已放慢） */
+  private lockEl: HTMLElement | null;
+  private lastLockText = '';
+
   constructor(private opts: TimelineOptions) {
     this.startTs = Date.parse(`${opts.start}T00:00:00Z`);
     this.endTs = Date.parse(`${opts.end}T00:00:00Z`);
@@ -49,6 +64,7 @@ export class Timeline {
     this.playBtn = document.getElementById('btn-play') as HTMLButtonElement;
     this.clockDate = document.getElementById('clock-date') as HTMLElement;
     this.clockSub = document.getElementById('clock-sub') as HTMLElement;
+    this.lockEl = document.getElementById('speed-lock');
 
     this.buildTicks();
     this.bind();
@@ -159,8 +175,11 @@ export class Timeline {
       const dt = Math.min(120, t - this.lastFrame);
       this.lastFrame = t;
       const curTs = this.toTs(this.current);
-      const sceneRate = this.opts.rateFactorAt ? this.opts.rateFactorAt(curTs, this.speed) : 1;
-      const next = this.current + (dt / durationMs) * this.speed * sceneRate;
+      const rate = this.opts.rateFactorAt
+        ? this.opts.rateFactorAt(curTs, this.speed)
+        : { time: 1, lock: 1 };
+      this.syncLockHint(rate.lock, true);
+      const next = this.current + (dt / durationMs) * this.speed * rate.time * rate.lock;
       if (next >= 1) {
         this.setValue(1, false);
         this.pause();
@@ -176,6 +195,28 @@ export class Timeline {
     this.playing = false;
     this.playBtn.classList.remove('is-playing');
     cancelAnimationFrame(this.raf);
+    this.syncLockHint(1, false);
+  }
+
+  /**
+   * 观感锁指示：仅在播放中且补偿明显偏离 1 时露出，
+   * 让用户知道「时间变慢」是比例尺造成的，而不是卡住。
+   */
+  private syncLockHint(lock: number, playing: boolean) {
+    if (!this.lockEl) return;
+    const visible = playing && Math.abs(lock - 1) >= 0.18;
+    if (!visible) {
+      if (!this.lockEl.hidden) {
+        this.lockEl.hidden = true;
+        this.lastLockText = '';
+      }
+      return;
+    }
+    const txt = `观感锁 ×${lock.toFixed(2)}`;
+    if (txt === this.lastLockText) return;
+    this.lastLockText = txt;
+    this.lockEl.textContent = txt;
+    this.lockEl.hidden = false;
   }
 
   get isPlaying() {

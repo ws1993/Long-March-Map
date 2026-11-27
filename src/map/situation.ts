@@ -3,6 +3,7 @@
  */
 import type { GeoJSONSource, Map as MlMap } from 'maplibre-gl';
 import type { LonLat, PlotGraphic, Situation, SituationPhase } from '../data/types';
+import { chaikin, fromLL, toLL } from '../plot/geo';
 import {
   assembleArea,
   attackArrowDetailed,
@@ -12,7 +13,6 @@ import {
   pointAlongLL,
   sliceLineLL,
 } from '../plot/plot';
-import { PALETTE } from './basemap';
 
 export interface SideStyle {
   fill: string;
@@ -266,19 +266,87 @@ export function addSituationLayers(map: MlMap) {
   map.addSource('sit-spines', { type: 'geojson', data: empty });
   map.addSource('sit-lines', { type: 'geojson', data: empty });
   map.addSource('sit-hydro', { type: 'geojson', data: empty });
+  map.addSource('sit-geo-zones', { type: 'geojson', data: empty });
 
   const beforeRoute = map.getLayer('routes-past-glow') ? 'routes-past-glow' : undefined;
 
-  // 1. 战役水系高亮底纹
+  // 0. 场景特殊地理面域（如松潘草地高原沼泽带）与山脊走向虚线
+  map.addLayer(
+    {
+      id: 'sit-geo-zone-fill',
+      type: 'fill',
+      source: 'sit-geo-zones',
+      filter: ['==', ['geometry-type'], 'Polygon'],
+      paint: {
+        'fill-color': '#3f8f82',
+        'fill-opacity': 0.16,
+      },
+    },
+    beforeRoute,
+  );
+
+  map.addLayer(
+    {
+      id: 'sit-geo-zone-line',
+      type: 'line',
+      source: 'sit-geo-zones',
+      paint: {
+        'line-color': [
+          'case',
+          ['==', ['get', 'kind'], 'ridge'],
+          'rgba(218, 198, 170, 0.42)',
+          'rgba(104, 196, 178, 0.48)',
+        ],
+        'line-width': ['case', ['==', ['get', 'kind'], 'ridge'], 2.2, 1.4],
+        'line-dasharray': [2.4, 2.2],
+      },
+    },
+    beforeRoute,
+  );
+
+  // 1. 战役水系双层发光渲染（主河道如赤水河、湘江、金沙江、大渡河采用高对比青碧发光带，一眼可辨）
+  map.addLayer(
+    {
+      id: 'sit-hydro-glow',
+      type: 'line',
+      source: 'sit-hydro',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['case', ['==', ['get', 'primary'], true], '#36d6f5', '#2a8eb0'],
+        'line-width': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          5.5,
+          ['case', ['==', ['get', 'primary'], true], 8, 5],
+          10.5,
+          ['case', ['==', ['get', 'primary'], true], 16, 10],
+        ],
+        'line-blur': 4,
+        'line-opacity': ['case', ['==', ['get', 'primary'], true], 0.36, 0.2],
+      },
+    },
+    beforeRoute,
+  );
+
   map.addLayer(
     {
       id: 'sit-hydro-line',
       type: 'line',
       source: 'sit-hydro',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': PALETTE.waterHi,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.5, 10.5, 3.2],
-        'line-opacity': 0.88,
+        'line-color': ['case', ['==', ['get', 'primary'], true], '#6ee7ff', '#46acc9'],
+        'line-width': [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          5.5,
+          ['case', ['==', ['get', 'primary'], true], 2.4, 1.6],
+          10.5,
+          ['case', ['==', ['get', 'primary'], true], 4.2, 2.8],
+        ],
+        'line-opacity': ['case', ['==', ['get', 'primary'], true], 0.96, 0.82],
       },
     },
     beforeRoute,
@@ -381,11 +449,17 @@ export function addSituationLayers(map: MlMap) {
   );
 }
 
-export function updateSituationLayers(map: MlMap, geo: SituationGeometry, hydro?: GeoJSON.FeatureCollection) {
+export function updateSituationLayers(
+  map: MlMap,
+  geo: SituationGeometry,
+  hydro?: GeoJSON.FeatureCollection,
+  geoZones?: GeoJSON.FeatureCollection,
+) {
   (map.getSource('sit-polygons') as GeoJSONSource | undefined)?.setData(geo.polygons);
   (map.getSource('sit-spines') as GeoJSONSource | undefined)?.setData(geo.spines);
   (map.getSource('sit-lines') as GeoJSONSource | undefined)?.setData(geo.lines);
   if (hydro) (map.getSource('sit-hydro') as GeoJSONSource | undefined)?.setData(hydro);
+  if (geoZones) (map.getSource('sit-geo-zones') as GeoJSONSource | undefined)?.setData(geoZones);
 }
 
 export function clearSituationLayers(map: MlMap) {
@@ -393,12 +467,36 @@ export function clearSituationLayers(map: MlMap) {
   (map.getSource('sit-spines') as GeoJSONSource | undefined)?.setData(empty);
   (map.getSource('sit-lines') as GeoJSONSource | undefined)?.setData(empty);
   (map.getSource('sit-hydro') as GeoJSONSource | undefined)?.setData(empty);
+  (map.getSource('sit-geo-zones') as GeoJSONSource | undefined)?.setData(empty);
 }
 
-export function hydroGeoJSON(rivers: Record<string, [number, number][]>): GeoJSON.FeatureCollection {
+export function hydroGeoJSON(
+  rivers: Record<string, [number, number][]>,
+  primaryKeys: string[] = [],
+): GeoJSON.FeatureCollection {
+  const pSet = new Set(primaryKeys);
   return {
     type: 'FeatureCollection',
-    features: Object.entries(rivers).map(([name, coords]) => line(coords, { name })),
+    features: Object.entries(rivers).map(([name, coords]) => {
+      const smooth = coords.length >= 3 ? toLL(chaikin(fromLL(coords), 2)) : coords;
+      return line(smooth, { name, primary: pSet.size === 0 || pSet.has(name) });
+    }),
+  };
+}
+
+export function geoZoneFeatures(
+  zones: { id: string; kind: 'marsh' | 'ridge'; coords: LonLat[] }[] = [],
+): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: zones.map((z) => {
+      if (z.kind === 'marsh') {
+        const smooth = z.coords.length >= 3 ? toLL(chaikin(fromLL(z.coords), 2)) : z.coords;
+        return poly(smooth, { id: z.id, kind: 'marsh' });
+      }
+      const smooth = z.coords.length >= 3 ? toLL(chaikin(fromLL(z.coords), 2)) : z.coords;
+      return line(smooth, { id: z.id, kind: 'ridge' });
+    }),
   };
 }
 

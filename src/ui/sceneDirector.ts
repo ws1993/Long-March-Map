@@ -3,7 +3,12 @@
  */
 import { Marker } from 'maplibre-gl';
 import type { Map as MlMap } from 'maplibre-gl';
-import { CAMPAIGN_SCENES, type CampaignScene, type SceneBeat } from '../data/scenes';
+import {
+  CAMPAIGN_SCENES,
+  type CampaignScene,
+  type SceneBeat,
+  type SceneGeoLabel,
+} from '../data/scenes';
 import type { LonLat } from '../data/types';
 import type { OverviewEnemyLayer } from '../map/enemyOverview';
 import { estimateTextWidth, type LabelArbiter } from '../map/labelArbiter';
@@ -14,11 +19,19 @@ import { parseLooseDate, type RouteHead } from '../map/routes';
 import {
   buildSituationGeometry,
   clearSituationLayers,
+  geoZoneFeatures,
   hydroGeoJSON,
   updateSituationLayers,
   type SituationClashPoint,
   type SituationLabelSpec,
 } from '../map/situation';
+
+import {
+  SPEED_LOCK,
+  smoothSpeedLock,
+  speedLockTarget,
+  type PlaybackRateProfile,
+} from './speedLock';
 
 const DAY_MS = 86400000;
 
@@ -63,11 +76,16 @@ export class SceneDirector {
   private manualRevealProgress: number | null = null;
   private currentBeat: PreparedBeat | null = null;
 
+  /** 比例尺观感补偿因子（逐帧平滑，null 表示尚未初始化） */
+  private speedLock: number | null = null;
+
   private latestLabels: SituationLabelSpec[] = [];
   private latestClashes: SituationClashPoint[] = [];
+  private latestGeoLabels: SceneGeoLabel[] = [];
 
   private labelPool = new Map<string, { marker: Marker; el: HTMLDivElement; txtEl: HTMLElement }>();
   private clashPool = new Map<string, { marker: Marker; el: HTMLDivElement; labelEl: HTMLElement | null }>();
+  private sceneGeoPool = new Map<string, { marker: Marker; el: HTMLDivElement; innerEl: HTMLElement }>();
 
   constructor(private opts: SceneDirectorOptions) {
     this.hudEl = document.getElementById('scene-hud') as HTMLElement;
@@ -95,13 +113,41 @@ export class SceneDirector {
     this.syncFollowButton();
   }
 
-  getPlaybackRateFactor(tsMs: number, userSpeed: number): number {
+  /**
+   * 计算本帧播放速率剖面。
+   * 时间推进速率 = 用户倍速 × profile.time（战役节奏）× profile.lock（比例尺补偿）。
+   *
+   * lock 把「时间一致」改成「观感一致」：屏幕位移速度 ∝ 世界速度 × 2^zoom，
+   * 用 2^(strength·(refZoom − zoom)) 反向抵消，放大则时间自动放慢。
+   */
+  getPlaybackRateProfile(tsMs: number, userSpeed: number): PlaybackRateProfile {
+    return {
+      time: this.beatRateFactor(tsMs, userSpeed),
+      lock: this.advanceSpeedLock(userSpeed),
+    };
+  }
+
+  /** 战役节奏压缩：把每个 beat 的历史跨度摊到约 4.6 秒（快速档不压缩） */
+  private beatRateFactor(tsMs: number, userSpeed: number): number {
     if (userSpeed >= 4) return 1;
     const hit = this.findBeatAt(tsMs);
     if (!hit) return 1.22;
     const beatDays = Math.max(1, (hit.tTo - hit.tFrom) / DAY_MS);
     const desiredDaysPerSec = beatDays / 4.6;
     return Math.max(0.14, Math.min(0.85, desiredDaysPerSec / 12.8));
+  }
+
+  /**
+   * 比例尺观感补偿：算出目标因子后做一阶平滑。
+   * 参考视野取当前战役的默认相机 zoom，无战役时用全国总览档，
+   * 于是每个战役在自己的目标视野下都是 1× 基准手感，用户再放大才会放慢。
+   */
+  private advanceSpeedLock(userSpeed: number): number {
+    const zoom = this.opts.map.getZoom();
+    const refZoom = this.currentBeat ? this.currentBeat.beat.camera.zoom : SPEED_LOCK.overviewZoom;
+    const strength = userSpeed >= 4 ? SPEED_LOCK.fastTierStrength : SPEED_LOCK.strength;
+    this.speedLock = smoothSpeedLock(this.speedLock, speedLockTarget(zoom, refZoom, strength));
+    return this.speedLock;
   }
 
   private renderSceneStrip() {
@@ -432,16 +478,58 @@ export class SceneDirector {
   }
 
   private paintBeat(pb: PreparedBeat, progress: number) {
-    const { scene, beat } = pb;
+    const { scene, beat, beatIndex } = pb;
     const geo = buildSituationGeometry(
       { id: beat.id, date: beat.from, title: beat.title, narrative: beat.caption, graphics: beat.graphics },
       scene.plotScale ?? 1,
       progress,
     );
-    updateSituationLayers(this.opts.map, geo, hydroGeoJSON(scene.hydro));
+    const activeZones = (scene.geoZones ?? []).filter(
+      (z) => !z.beats || z.beats.includes(beatIndex),
+    );
+    updateSituationLayers(
+      this.opts.map,
+      geo,
+      hydroGeoJSON(scene.hydro, scene.primaryHydro),
+      geoZoneFeatures(activeZones),
+    );
 
     this.latestLabels = geo.labels;
     this.latestClashes = geo.clashes;
+    this.latestGeoLabels = (scene.geoLabels ?? []).filter(
+      (g) => !g.beats || g.beats.includes(beatIndex),
+    );
+
+    // 同步战役专属地理地物标签池（河流、山脉、草地沼泽）
+    const seenGeo = new Set<string>();
+    const GEO_GLYPH: Record<SceneGeoLabel['kind'], string> = {
+      river: '≈',
+      mountain: '▲',
+      marsh: '❖',
+    };
+    for (const gl of this.latestGeoLabels) {
+      seenGeo.add(gl.id);
+      let gItem = this.sceneGeoPool.get(gl.id);
+      if (!gItem) {
+        const el = document.createElement('div');
+        el.className = `lm-sc-geo lm-sc-geo--${gl.kind}`;
+        const innerEl = document.createElement('span');
+        innerEl.className = 'lm-sc-geo__inner';
+        innerEl.innerHTML = `<i aria-hidden="true">${GEO_GLYPH[gl.kind]}</i>${escapeHtml(gl.name)}`;
+        if (gl.rotate) innerEl.style.setProperty('--geo-rot', `${gl.rotate}deg`);
+        el.appendChild(innerEl);
+        const marker = new Marker({ element: el, anchor: 'center' })
+          .setLngLat(gl.coords[0])
+          .addTo(this.opts.map);
+        gItem = { marker, el, innerEl };
+        this.sceneGeoPool.set(gl.id, gItem);
+      }
+    }
+    for (const [key, gItem] of this.sceneGeoPool) {
+      if (!seenGeo.has(key)) {
+        gItem.el.classList.add('is-hidden');
+      }
+    }
 
     // 同步 DOM 池元素坐标，交由统一仲裁器决定偏置方向与显隐
     const seenLabels = new Set<string>();
@@ -518,7 +606,7 @@ export class SceneDirector {
     }
   }
 
-  /** 在全局仲裁器中排布激战标签与箭头/防线侧翼态势签 */
+  /** 在全局仲裁器中排布激战标签、主角山川水系注记与箭头侧翼态势签 */
   placeLabels(arbiter: LabelArbiter) {
     if (!this.currentBeat || !this.postureVisible) return;
 
@@ -541,6 +629,37 @@ export class SceneDirector {
       }
     }
 
+    // 先锁定本幕主角地理地物（列表首项如赤水河、湘江、金沙江、大渡河、松潘草地、乌蒙山脉），让箭头番号自动绕开河名
+    const placeOneGeo = (gl: SceneGeoLabel) => {
+      const gItem = this.sceneGeoPool.get(gl.id);
+      if (!gItem) return;
+      const w = estimateTextWidth(gl.name, 12, 22);
+      let placed = false;
+      for (const candidateCoord of gl.coords) {
+        const choice = arbiter.placeAroundPoint(candidateCoord, w, 19, {
+          gap: 4,
+          preferred: 'center-top',
+          maxRouteHits: 3,
+        });
+        if (choice) {
+          gItem.marker.setLngLat(candidateCoord);
+          gItem.innerEl.dataset.align = choice.align;
+          gItem.innerEl.style.left = `${choice.dx.toFixed(1)}px`;
+          gItem.innerEl.style.top = `${choice.dy.toFixed(1)}px`;
+          gItem.el.classList.remove('is-hidden');
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        gItem.el.classList.add('is-hidden');
+      }
+    };
+
+    const primaryGeos = this.latestGeoLabels.slice(0, 2);
+    const secondaryGeos = this.latestGeoLabels.slice(2);
+    for (const gl of primaryGeos) placeOneGeo(gl);
+
     for (const lb of this.latestLabels) {
       const item = this.labelPool.get(lb.id);
       if (!item) continue;
@@ -560,6 +679,8 @@ export class SceneDirector {
         item.el.classList.add('is-hidden');
       }
     }
+
+    for (const gl of secondaryGeos) placeOneGeo(gl);
   }
 
   private applyDetailTerrain(active: string | null) {
@@ -576,8 +697,11 @@ export class SceneDirector {
     this.labelPool.clear();
     for (const item of this.clashPool.values()) item.marker.remove();
     this.clashPool.clear();
+    for (const item of this.sceneGeoPool.values()) item.marker.remove();
+    this.sceneGeoPool.clear();
     this.latestLabels = [];
     this.latestClashes = [];
+    this.latestGeoLabels = [];
   }
 
   private clearSceneMapArtifacts() {

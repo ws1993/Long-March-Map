@@ -164,7 +164,7 @@ async function boot() {
     end: '1936-10-22',
     markers: allNodes,
     durationSeconds: 58,
-    rateFactorAt: (tsMs, speed) => sceneDirector.getPlaybackRateFactor(tsMs, speed),
+    rateFactorAt: (tsMs, speed) => sceneDirector.getPlaybackRateProfile(tsMs, speed),
     onDate: (iso, tsMs, meta) => {
       updateRouteLayers(map, tsMs, Boolean(meta.jump));
       enemyOverview.setDate(tsMs);

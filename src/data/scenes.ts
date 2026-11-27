@@ -31,6 +31,25 @@ export interface SceneBeat {
   graphics: PlotGraphic[];
 }
 
+export interface SceneGeoLabel {
+  id: string;
+  name: string;
+  kind: 'river' | 'mountain' | 'marsh';
+  /** 首选落位坐标与备选落位坐标（若首选处被战术箭头或节点占用，仲裁器自动切至备选处） */
+  coords: LonLat[];
+  /** 顺应河道或山脉走向的微倾角度（度） */
+  rotate?: number;
+  /** 仅在特定节拍索引下显示（不填则该战役全程显示） */
+  beats?: number[];
+}
+
+export interface SceneGeoZone {
+  id: string;
+  kind: 'marsh' | 'ridge';
+  coords: LonLat[];
+  beats?: number[];
+}
+
 export interface CampaignScene {
   id: string;
   index: number;
@@ -44,6 +63,12 @@ export interface CampaignScene {
   detailTerrain?: string;
   plotScale?: number;
   hydro: Record<string, LonLat[]>;
+  /** 主角水系键名（以高对比青碧发光带突出显示，如四渡赤水中的 chishui） */
+  primaryHydro?: string[];
+  /** 进入该战役时自动浮现的关键河流、山脉、草地地理注记 */
+  geoLabels?: SceneGeoLabel[];
+  /** 进入该战役时绘制的山脊线或沼泽面域 */
+  geoZones?: SceneGeoZone[];
   beats: SceneBeat[];
 }
 
@@ -62,6 +87,47 @@ export const CAMPAIGN_SCENES: CampaignScene[] = [
     detailTerrain: 'xiangjiang',
     plotScale: 0.82,
     hydro: xiangjiangHydrography,
+    primaryHydro: ['xiangjiang'],
+    geoLabels: [
+      {
+        id: 'geo-xj-river',
+        name: '湘 江',
+        kind: 'river',
+        coords: [
+          [110.74, 25.85],
+          [110.58, 25.56],
+        ],
+        rotate: -32,
+      },
+      {
+        id: 'geo-xj-yuecheng',
+        name: '越城岭（老山界）',
+        kind: 'mountain',
+        coords: [
+          [110.46, 25.78],
+          [110.45, 25.62],
+        ],
+        rotate: -58,
+      },
+      {
+        id: 'geo-xj-dupang',
+        name: '都庞岭',
+        kind: 'mountain',
+        coords: [[111.28, 25.48]],
+        rotate: -52,
+      },
+    ],
+    geoZones: [
+      {
+        id: 'gz-yuecheng',
+        kind: 'ridge',
+        coords: [
+          [110.38, 25.52],
+          [110.48, 25.74],
+          [110.58, 25.96],
+        ],
+      },
+    ],
     beats: [
       {
         id: 'xj-b1',
@@ -258,7 +324,43 @@ export const CAMPAIGN_SCENES: CampaignScene[] = [
     redSide: { name: '中央红军', strength: '3 万余人' },
     enemySide: { name: '何键湘西五路军 + 黔军', strength: '约 20 万人' },
     plotScale: 1.9,
-    hydro: { wujiang: chishuiHydrography.wujiang },
+    hydro: {
+      wujiang: chishuiHydrography.wujiang,
+      qingshuijiang: [
+        [107.85, 26.55],
+        [108.55, 26.72],
+        [109.25, 26.92],
+        [109.85, 27.22],
+      ],
+    },
+    primaryHydro: ['wujiang'],
+    geoLabels: [
+      {
+        id: 'geo-td-wujiang',
+        name: '乌 江',
+        kind: 'river',
+        coords: [
+          [106.92, 27.12],
+          [107.68, 27.64],
+        ],
+        rotate: -24,
+      },
+      {
+        id: 'geo-td-qingshui',
+        name: '清水江',
+        kind: 'river',
+        coords: [[108.72, 26.78]],
+        rotate: -18,
+        beats: [0],
+      },
+      {
+        id: 'geo-td-miaoling',
+        name: '苗 岭',
+        kind: 'mountain',
+        coords: [[108.25, 26.32]],
+        rotate: -12,
+      },
+    ],
     beats: [
       {
         id: 'td-b1',
@@ -388,6 +490,63 @@ export const CAMPAIGN_SCENES: CampaignScene[] = [
     detailTerrain: 'sidu',
     plotScale: 1.9,
     hydro: chishuiHydrography,
+    primaryHydro: ['chishui'],
+    geoLabels: [
+      {
+        id: 'geo-cs-chishui-mid',
+        name: '赤水河',
+        kind: 'river',
+        coords: [
+          [106.16, 28.05],
+          [105.78, 28.56],
+          [105.55, 27.52],
+        ],
+        rotate: -46,
+      },
+      {
+        id: 'geo-cs-wujiang',
+        name: '乌 江',
+        kind: 'river',
+        coords: [
+          [106.45, 26.96],
+          [107.35, 27.38],
+        ],
+        rotate: -22,
+      },
+      {
+        id: 'geo-cs-changjiang',
+        name: '长 江',
+        kind: 'river',
+        coords: [
+          [105.12, 28.86],
+          [106.18, 29.05],
+        ],
+        rotate: -12,
+      },
+      {
+        id: 'geo-cs-loushan',
+        name: '大娄山脉',
+        kind: 'mountain',
+        coords: [
+          [107.12, 28.18],
+          [106.62, 27.98],
+        ],
+        rotate: -36,
+        beats: [0, 1, 2],
+      },
+    ],
+    geoZones: [
+      {
+        id: 'gz-daloushan',
+        kind: 'ridge',
+        coords: [
+          [106.52, 27.82],
+          [106.85, 28.02],
+          [107.25, 28.32],
+        ],
+        beats: [0, 1, 2],
+      },
+    ],
     beats: [
       {
         id: 'cs-b1',
@@ -689,6 +848,42 @@ export const CAMPAIGN_SCENES: CampaignScene[] = [
     enemySide: { name: '薛岳追军 + 川军刘湘·刘文辉部', strength: '十余万人' },
     plotScale: 2.35,
     hydro: jinshaDaduHydrography,
+    primaryHydro: ['jinsha', 'dadu'],
+    geoLabels: [
+      {
+        id: 'geo-jd-jinsha',
+        name: '金沙江',
+        kind: 'river',
+        coords: [
+          [101.95, 26.20],
+          [102.95, 26.75],
+        ],
+        rotate: -22,
+        beats: [0],
+      },
+      {
+        id: 'geo-jd-dadu',
+        name: '大渡河',
+        kind: 'river',
+        coords: [
+          [102.62, 29.28],
+          [102.08, 30.18],
+        ],
+        rotate: -12,
+        beats: [1],
+      },
+      {
+        id: 'geo-jd-daliang',
+        name: '大凉山（彝区）',
+        kind: 'mountain',
+        coords: [
+          [102.82, 28.35],
+          [101.78, 28.38],
+        ],
+        rotate: -68,
+        beats: [1],
+      },
+    ],
     beats: [
       {
         id: 'jd-b1',
@@ -824,7 +1019,80 @@ export const CAMPAIGN_SCENES: CampaignScene[] = [
     redSide: { name: '红一、四方面军 / 陕甘支队', strength: '两大主力会师北上' },
     enemySide: { name: '胡宗南部主力 + 鲁大昌部', strength: '松潘重兵筑碉封锁' },
     plotScale: 2.15,
-    hydro: {},
+    hydro: {
+      minjiang: [
+        [103.62, 32.95],
+        [103.60, 32.42],
+        [103.82, 31.68],
+        [103.62, 31.02],
+      ],
+      bailongjiang: [
+        [103.05, 34.18],
+        [103.58, 34.08],
+        [104.25, 33.75],
+      ],
+    },
+    primaryHydro: ['bailongjiang', 'minjiang'],
+    geoLabels: [
+      {
+        id: 'geo-gl-jiajin',
+        name: '夹金山（大雪山）',
+        kind: 'mountain',
+        coords: [[102.25, 30.65]],
+        rotate: -42,
+        beats: [0],
+      },
+      {
+        id: 'geo-gl-minjiang',
+        name: '岷 江',
+        kind: 'river',
+        coords: [[103.75, 31.95]],
+        rotate: 76,
+        beats: [0],
+      },
+      {
+        id: 'geo-gl-marsh',
+        name: '松潘草地（600里高原沼泽）',
+        kind: 'marsh',
+        coords: [
+          [102.45, 33.05],
+          [102.58, 32.85],
+        ],
+        beats: [1],
+      },
+      {
+        id: 'geo-gl-minshan',
+        name: '岷山山脉',
+        kind: 'mountain',
+        coords: [[103.95, 33.62]],
+        rotate: -28,
+        beats: [1],
+      },
+    ],
+    geoZones: [
+      {
+        id: 'gz-grassland-marsh',
+        kind: 'marsh',
+        coords: [
+          [102.38, 32.68],
+          [103.08, 32.62],
+          [103.22, 33.15],
+          [102.98, 33.52],
+          [102.42, 33.42],
+          [102.28, 32.98],
+        ],
+      },
+      {
+        id: 'gz-jiajin-ridge',
+        kind: 'ridge',
+        coords: [
+          [102.42, 30.62],
+          [102.72, 30.85],
+          [102.98, 31.12],
+        ],
+        beats: [0],
+      },
+    ],
     beats: [
       {
         id: 'gl-b1',
@@ -958,7 +1226,86 @@ export const CAMPAIGN_SCENES: CampaignScene[] = [
     redSide: { name: '红一、二、四方面军', strength: '三大主力北上会合' },
     enemySide: { name: '乌蒙五纵队 / 西北截击军', strength: '十余万人围追截击' },
     plotScale: 2.1,
-    hydro: {},
+    hydro: {
+      jinshaWest: [
+        [102.85, 26.62],
+        [103.35, 27.25],
+        [103.85, 28.05],
+      ],
+      zulihe: [
+        [105.35, 35.38],
+        [105.05, 35.72],
+        [104.72, 36.35],
+      ],
+      weihe: [
+        [104.15, 34.88],
+        [104.95, 34.78],
+        [105.85, 34.62],
+      ],
+    },
+    primaryHydro: ['jinshaWest', 'zulihe'],
+    geoLabels: [
+      {
+        id: 'geo-wh-wumeng',
+        name: '乌蒙山脉',
+        kind: 'mountain',
+        coords: [
+          [104.18, 27.18],
+          [104.42, 26.58],
+        ],
+        rotate: -38,
+        beats: [0],
+      },
+      {
+        id: 'geo-wh-jinsha',
+        name: '金沙江',
+        kind: 'river',
+        coords: [[103.28, 27.18]],
+        rotate: -52,
+        beats: [0],
+      },
+      {
+        id: 'geo-wh-liupan',
+        name: '六盘山脉',
+        kind: 'mountain',
+        coords: [
+          [106.25, 35.52],
+          [106.22, 35.95],
+        ],
+        rotate: -68,
+        beats: [1],
+      },
+      {
+        id: 'geo-wh-weihe',
+        name: '渭 河',
+        kind: 'river',
+        coords: [[104.95, 34.75]],
+        rotate: 8,
+        beats: [1],
+      },
+    ],
+    geoZones: [
+      {
+        id: 'gz-wumeng-ridge',
+        kind: 'ridge',
+        coords: [
+          [103.95, 26.55],
+          [104.35, 27.05],
+          [104.82, 27.48],
+        ],
+        beats: [0],
+      },
+      {
+        id: 'gz-liupan-ridge',
+        kind: 'ridge',
+        coords: [
+          [106.28, 35.15],
+          [106.18, 35.65],
+          [106.08, 36.12],
+        ],
+        beats: [1],
+      },
+    ],
     beats: [
       {
         id: 'wh-b1',
