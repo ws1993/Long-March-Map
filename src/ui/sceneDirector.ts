@@ -1,28 +1,23 @@
 /**
- * 战役场景编排控制器（SceneDirector）。
- *
- * 核心职责：
- * 1. 将长征主路线（全程常驻不断）与六大核心战役场景融为一体；
- * 2. 随时间轴推进（或用户点选场景/节拍芯片）自动驱动：
- *    - 镜头平滑推入战场沙盘 / 结束后拉回行军走廊（支持人工拖拽自动挂起跟随）；
- *    - 敌我进攻箭头、钳形合击、锯齿防线的 0→1 渐进生长动画与激战脉冲点；
- *    - 高精度战场地形切片（湘江 / 四渡赤水）切换；
- *    - 战略重镇地标跨级聚光高亮（如四渡赤水末段的「贵阳」、巧渡金沙江前的「昆明」、过草地前的「松潘」）；
- * 3. 复用 DOM Marker 池，保证 60fps 推演过程零节点销毁重建抖动。
+ * 战役场景编排控制器（SceneDirector）：接入全局 LabelArbiter，态势签沿箭头法向两侧避让排布。
  */
 import { Marker } from 'maplibre-gl';
 import type { Map as MlMap } from 'maplibre-gl';
 import { CAMPAIGN_SCENES, type CampaignScene, type SceneBeat } from '../data/scenes';
 import type { LonLat } from '../data/types';
 import type { OverviewEnemyLayer } from '../map/enemyOverview';
+import { estimateTextWidth, type LabelArbiter } from '../map/labelArbiter';
 import type { LandmarkLayer } from '../map/landmarks';
-import { escapeHtml } from '../map/nodes';
+import { escapeHtml, type NodeLayer } from '../map/nodes';
+import type { RouteLabelLayer } from '../map/routeLabels';
 import { parseLooseDate, type RouteHead } from '../map/routes';
 import {
   buildSituationGeometry,
   clearSituationLayers,
   hydroGeoJSON,
   updateSituationLayers,
+  type SituationClashPoint,
+  type SituationLabelSpec,
 } from '../map/situation';
 
 const DAY_MS = 86400000;
@@ -39,9 +34,12 @@ export interface SceneDirectorOptions {
   map: MlMap;
   enemyOverview: OverviewEnemyLayer;
   landmarks: LandmarkLayer;
+  nodeLayer: NodeLayer;
+  routeLabels: RouteLabelLayer;
   homeBounds: [[number, number], [number, number]];
   homePadding: { top: number; bottom: number; left: number; right: number };
   onSelectBeatDate: (isoDate: string, autoPlay: boolean) => void;
+  onRequestLayout: () => void;
 }
 
 export class SceneDirector {
@@ -61,14 +59,15 @@ export class SceneDirector {
   private lastCameraKey: string | null = null;
   private lastCorridorFollowTs = 0;
 
-  /** 暂停状态下点选场景/节拍时，用本地 2.2s 计时器完整演播 0→1 战术生长动画 */
   private manualRevealRaf = 0;
   private manualRevealProgress: number | null = null;
   private currentBeat: PreparedBeat | null = null;
 
-  /** 复用当前节拍的标签与激战脉冲 DOM 池，60fps 下只改坐标与透明度 */
-  private labelPool = new Map<string, { marker: Marker; el: HTMLDivElement }>();
-  private clashPool = new Map<string, { marker: Marker; el: HTMLDivElement }>();
+  private latestLabels: SituationLabelSpec[] = [];
+  private latestClashes: SituationClashPoint[] = [];
+
+  private labelPool = new Map<string, { marker: Marker; el: HTMLDivElement; txtEl: HTMLElement }>();
+  private clashPool = new Map<string, { marker: Marker; el: HTMLDivElement; labelEl: HTMLElement | null }>();
 
   constructor(private opts: SceneDirectorOptions) {
     this.hudEl = document.getElementById('scene-hud') as HTMLElement;
@@ -96,13 +95,11 @@ export class SceneDirector {
     this.syncFollowButton();
   }
 
-  /** 供时间轴计算自适应演播速率：进入核心战役节拍时自动放缓，保证每个节拍约有 4.8 秒演播时长 */
   getPlaybackRateFactor(tsMs: number, userSpeed: number): number {
     if (userSpeed >= 4) return 1;
     const hit = this.findBeatAt(tsMs);
-    if (!hit) return 1.22; // 非战役长途行军段略微轻快推进
+    if (!hit) return 1.22;
     const beatDays = Math.max(1, (hit.tTo - hit.tFrom) / DAY_MS);
-    // 基准 1x 下 743 天 / 58 秒 ≈ 12.8 天/秒；希望单节拍持续约 4.6 秒 → 目标速率 = beatDays / 4.6
     const desiredDaysPerSec = beatDays / 4.6;
     return Math.max(0.14, Math.min(0.85, desiredDaysPerSec / 12.8));
   }
@@ -125,7 +122,6 @@ export class SceneDirector {
   }
 
   private bindInteractions() {
-    // 监听真实用户手势：拖拽、滚轮或触控缩放地图时立即让出镜头控制权，绝不与用户抢手
     const onUserGesture = (e: { originalEvent?: Event }) => {
       if (!e.originalEvent) return;
       if (this.followEnabled && !this.userDetached) {
@@ -151,7 +147,6 @@ export class SceneDirector {
       if (this.followEnabled) this.reapplyCurrentCamera();
     });
 
-    // HUD 内部节拍切换、上下一幕与退出按钮委托
     this.hudEl.addEventListener('click', (e) => {
       const beatBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-beat-idx]');
       if (beatBtn && this.currentBeat) {
@@ -184,7 +179,6 @@ export class SceneDirector {
     }
   }
 
-  /** 外部主动跳转到某个战役场景与节拍（如点击底部芯片、右上角「战役剧场」或节点详情入口） */
   focusScene(sceneId: string, beatIndex = 0, autoPlay = false) {
     const scene = CAMPAIGN_SCENES.find((s) => s.id === sceneId) ?? CAMPAIGN_SCENES[0];
     if (!scene) return;
@@ -196,7 +190,6 @@ export class SceneDirector {
     this.syncFollowButton();
     this.lastCameraKey = `${scene.id}:${beat.id}`;
 
-    // 启动单幕 0→1 渐进推演动画，即便时间轴处于暂停态也能完整看到敌我态势动态展开
     this.startManualReveal();
     this.opts.onSelectBeatDate(beat.from, autoPlay);
 
@@ -204,7 +197,6 @@ export class SceneDirector {
     this.opts.map.flyTo({ center: cam.center, zoom: cam.zoom, duration: 1150, essential: true });
   }
 
-  /** 循环切入当前或下一场核心战役（绑定顶部「战役剧场」按钮） */
   openTheater(preferredSceneId?: string) {
     if (preferredSceneId) {
       this.focusScene(preferredSceneId, 0, false);
@@ -219,7 +211,6 @@ export class SceneDirector {
     this.focusScene(next.id, 0, false);
   }
 
-  /** 返回全国总览小比例尺视野 */
   resetToOverview() {
     this.userDetached = true;
     this.syncFollowButton();
@@ -230,6 +221,7 @@ export class SceneDirector {
     this.postureVisible = on;
     if (!on) {
       this.clearSceneMapArtifacts();
+      this.opts.onRequestLayout();
     } else if (this.currentBeat) {
       this.paintBeat(this.currentBeat, this.manualRevealProgress ?? 1);
     }
@@ -267,7 +259,6 @@ export class SceneDirector {
   }
 
   private findBeatAt(tsMs: number): PreparedBeat | null {
-    // 加 60 秒容差采用左闭右开区间 [tFrom, tTo)，避免浮点除法精度在相邻节拍零点交界处落回上一拍
     const probe = tsMs + 60000;
     for (const pb of this.preparedBeats) {
       if (probe >= pb.tFrom && probe < pb.tTo) return pb;
@@ -275,7 +266,6 @@ export class SceneDirector {
     return null;
   }
 
-  /** 时间轴每次日期/毫秒推进时调用 */
   updateAt(tsMs: number, heads: RouteHead[], isPlaying: boolean, speed: number) {
     if (isPlaying && this.manualRevealRaf) {
       cancelAnimationFrame(this.manualRevealRaf);
@@ -285,7 +275,6 @@ export class SceneDirector {
 
     const hit = this.findBeatAt(tsMs);
 
-    // 高亮底部场景芯片
     if ((hit?.scene.id ?? null) !== this.activeSceneId) {
       this.activeSceneId = hit?.scene.id ?? null;
       this.stripEl.querySelectorAll<HTMLElement>('.lm-scene-chip').forEach((el) => {
@@ -303,9 +292,11 @@ export class SceneDirector {
         this.applyDetailTerrain(null);
         this.opts.enemyOverview.setSceneActive(false);
         this.opts.landmarks.setSceneContext(null, []);
+        this.opts.nodeLayer.setSceneFilter(false, []);
+        this.opts.routeLabels.setSceneActive(false);
         this.clearSceneMapArtifacts();
+        this.opts.onRequestLayout();
 
-        // 走出战役场景后，若开启镜头跟随则平缓拉回走廊中景，继续观察红军战略转移主线
         if (this.followEnabled && !this.userDetached && isPlaying) {
           const lead = heads.find((h) => h.status === 'marching') ?? heads[0];
           if (lead) {
@@ -314,11 +305,11 @@ export class SceneDirector {
           }
         }
       } else if (this.followEnabled && !this.userDetached && isPlaying) {
-        // 长途行军期间每 1.8 秒轻柔跟随主推进点平移，保持主线在视野舒适区
         const nowPerf = performance.now();
         if (nowPerf - this.lastCorridorFollowTs > 1800) {
-          const lead = heads.find((h) => h.army.id === 'red1' && h.status === 'marching')
-            ?? heads.find((h) => h.status === 'marching');
+          const lead =
+            heads.find((h) => h.army.id === 'red1' && h.status === 'marching') ??
+            heads.find((h) => h.status === 'marching');
           if (lead) {
             this.opts.map.easeTo({
               center: lead.coord,
@@ -332,7 +323,6 @@ export class SceneDirector {
       return;
     }
 
-    // 命中战役节拍
     const beatKey = `${hit.scene.id}:${hit.beat.id}`;
     const beatChanged = beatKey !== this.activeBeatKey;
     this.currentBeat = hit;
@@ -343,6 +333,8 @@ export class SceneDirector {
       this.applyDetailTerrain(hit.scene.detailTerrain ?? null);
       this.opts.enemyOverview.setSceneActive(true);
       this.opts.landmarks.setSceneContext(hit.scene.id, hit.beat.focusLandmarks ?? []);
+      this.opts.nodeLayer.setSceneFilter(true, hit.beat.focusNodes ?? []);
+      this.opts.routeLabels.setSceneActive(true);
       this.renderHud(hit);
 
       if (this.followEnabled && !this.userDetached && this.lastCameraKey !== beatKey) {
@@ -448,28 +440,33 @@ export class SceneDirector {
     );
     updateSituationLayers(this.opts.map, geo, hydroGeoJSON(scene.hydro));
 
-    // 更新战术标签池（复用已有 Marker，避免每帧重建 DOM）
+    this.latestLabels = geo.labels;
+    this.latestClashes = geo.clashes;
+
+    // 同步 DOM 池元素坐标，交由统一仲裁器决定偏置方向与显隐
     const seenLabels = new Set<string>();
-    geo.labels.forEach((lb, i) => {
-      const key = `${lb.side}:${lb.text}:${i}`;
-      seenLabels.add(key);
-      let item = this.labelPool.get(key);
+    for (const lb of geo.labels) {
+      seenLabels.add(lb.id);
+      let item = this.labelPool.get(lb.id);
       if (!item) {
         const el = document.createElement('div');
         el.className = `sit-label sit-label--${
           lb.side === 'red' ? 'red' : lb.side === 'enemy' ? 'enemy' : 'neutral'
         }`;
-        el.textContent = lb.text;
-        if (lb.size) el.style.fontSize = `${lb.size}px`;
+        const txtEl = document.createElement('span');
+        txtEl.className = 'sit-label__txt';
+        txtEl.dataset.align = 'left';
+        txtEl.textContent = lb.text;
+        if (lb.size) txtEl.style.fontSize = `${lb.size}px`;
+        el.appendChild(txtEl);
         const marker = new Marker({ element: el, anchor: 'center' }).setLngLat(lb.coord).addTo(this.opts.map);
-        item = { marker, el };
-        this.labelPool.set(key, item);
+        item = { marker, el, txtEl };
+        this.labelPool.set(lb.id, item);
       } else {
         item.marker.setLngLat(lb.coord);
       }
-      item.el.style.opacity = String((lb.alpha ?? 1).toFixed(2));
-      item.el.classList.remove('is-hidden');
-    });
+      item.el.dataset.baseAlpha = String((lb.alpha ?? 1).toFixed(2));
+    }
 
     for (const [key, item] of this.labelPool) {
       if (!seenLabels.has(key)) {
@@ -478,7 +475,6 @@ export class SceneDirector {
       }
     }
 
-    // 更新激战脉冲波纹点池
     const seenClashes = new Set<string>();
     for (const cl of geo.clashes) {
       seenClashes.add(cl.id);
@@ -491,10 +487,11 @@ export class SceneDirector {
           <span class="lm-clash__core" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"/></svg>
           </span>
-          ${cl.label ? `<span class="lm-clash__label">${escapeHtml(cl.label)}</span>` : ''}
+          ${cl.label ? `<span class="lm-clash__label" data-align="center-bottom">${escapeHtml(cl.label)}</span>` : ''}
         `;
+        const labelEl = el.querySelector<HTMLElement>('.lm-clash__label');
         const marker = new Marker({ element: el, anchor: 'center' }).setLngLat(cl.coord).addTo(this.opts.map);
-        item = { marker, el };
+        item = { marker, el, labelEl };
         this.clashPool.set(cl.id, item);
       } else {
         item.marker.setLngLat(cl.coord);
@@ -505,6 +502,60 @@ export class SceneDirector {
 
     for (const [key, item] of this.clashPool) {
       if (!seenClashes.has(key)) {
+        item.el.style.opacity = '0';
+        item.el.classList.add('is-hidden');
+      }
+    }
+
+    this.opts.onRequestLayout();
+  }
+
+  /** 向全局仲裁器登记激战核心图标 */
+  reserveIcons(arbiter: LabelArbiter) {
+    if (!this.currentBeat || !this.postureVisible) return;
+    for (const cl of this.latestClashes) {
+      arbiter.reserveIcon(cl.coord, 13);
+    }
+  }
+
+  /** 在全局仲裁器中排布激战标签与箭头/防线侧翼态势签 */
+  placeLabels(arbiter: LabelArbiter) {
+    if (!this.currentBeat || !this.postureVisible) return;
+
+    for (const cl of this.latestClashes) {
+      const item = this.clashPool.get(cl.id);
+      if (!item || !item.labelEl || !cl.label) continue;
+      const w = estimateTextWidth(cl.label, 10.5, 10);
+      const choice = arbiter.placeAroundPoint(cl.coord, w, 17, {
+        gap: 15,
+        preferred: 'center-bottom',
+        maxRouteHits: 2,
+      });
+      if (choice) {
+        item.labelEl.dataset.align = choice.align;
+        item.labelEl.style.left = `calc(50% + ${choice.dx.toFixed(1)}px)`;
+        item.labelEl.style.top = `calc(50% + ${choice.dy.toFixed(1)}px)`;
+        item.labelEl.style.display = 'block';
+      } else {
+        item.labelEl.style.display = 'none';
+      }
+    }
+
+    for (const lb of this.latestLabels) {
+      const item = this.labelPool.get(lb.id);
+      if (!item) continue;
+      const w = estimateTextWidth(lb.text, lb.size ?? 11, 8);
+      const choice = lb.tangentTo
+        ? arbiter.placeAlongsideVector(lb.coord, lb.tangentTo, w, 17, 15)
+        : arbiter.placeAroundPoint(lb.coord, w, 17, { gap: 10 });
+
+      if (choice) {
+        item.txtEl.dataset.align = choice.align;
+        item.txtEl.style.left = `${choice.dx.toFixed(1)}px`;
+        item.txtEl.style.top = `${choice.dy.toFixed(1)}px`;
+        item.el.style.opacity = item.el.dataset.baseAlpha ?? '1';
+        item.el.classList.remove('is-hidden');
+      } else {
         item.el.style.opacity = '0';
         item.el.classList.add('is-hidden');
       }
@@ -525,6 +576,8 @@ export class SceneDirector {
     this.labelPool.clear();
     for (const item of this.clashPool.values()) item.marker.remove();
     this.clashPool.clear();
+    this.latestLabels = [];
+    this.latestClashes = [];
   }
 
   private clearSceneMapArtifacts() {

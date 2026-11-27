@@ -1,9 +1,10 @@
 /**
- * 战略重镇与战术地标图层（DOM Marker，受三级比例尺 LOD 与当前激活战役场景双重控制）。
+ * 战略重镇与战术地标图层（接入 LabelArbiter 统一避让，普通地标采用纯净描边字，聚光目标采用轻底衬）。
  */
 import { Marker } from 'maplibre-gl';
 import type { Map as MlMap } from 'maplibre-gl';
 import { landmarks, type Landmark } from '../data/landmarks';
+import { estimateTextWidth, type LabelArbiter } from './labelArbiter';
 import { escapeHtml } from './nodes';
 
 export class LandmarkLayer {
@@ -11,83 +12,122 @@ export class LandmarkLayer {
     spec: Landmark;
     marker: Marker;
     el: HTMLDivElement;
+    bodyEl: HTMLElement;
     noteEl: HTMLElement;
   }[] = [];
   private activeSceneId: string | null = null;
   private highlightedIds: Set<string> = new Set();
   private enabled = true;
 
-  constructor(private map: MlMap) {
+  constructor(
+    private map: MlMap,
+    private onRequestLayout?: () => void,
+  ) {
     for (const spec of landmarks) {
       const el = document.createElement('div');
-      el.className = `lm-landmark lm-landmark--${spec.tier} lm-landmark--anchor-${spec.anchor ?? 'right'}`;
+      el.className = `lm-landmark lm-landmark--${spec.tier}`;
       el.innerHTML = `
         <span class="lm-landmark__glyph" aria-hidden="true"></span>
-        <span class="lm-landmark__body">
+        <span class="lm-landmark__body" data-align="left" style="left:calc(50% + 10px);top:50%">
           <strong class="lm-landmark__name">${escapeHtml(spec.name)}</strong>
           <em class="lm-landmark__note"></em>
         </span>
       `;
       if (spec.brief) el.title = `${spec.name}｜${spec.brief}`;
+      const bodyEl = el.querySelector('.lm-landmark__body') as HTMLElement;
       const noteEl = el.querySelector('.lm-landmark__note') as HTMLElement;
       const marker = new Marker({ element: el, anchor: 'center' }).setLngLat(spec.coord).addTo(this.map);
-      this.items.push({ spec, marker, el, noteEl });
+      this.items.push({ spec, marker, el, bodyEl, noteEl });
     }
-
-    this.refresh();
-    this.map.on('zoom', () => this.refresh());
   }
 
-  /** 由场景编排器更新当前所处战役场景及本阶段重点点名的地标 ID */
   setSceneContext(sceneId: string | null, focusLandmarkIds: string[] = []) {
     this.activeSceneId = sceneId;
     this.highlightedIds = new Set(focusLandmarkIds);
-    this.refresh();
   }
 
   setEnabled(on: boolean) {
     this.enabled = on;
-    this.refresh();
+    this.onRequestLayout?.();
   }
 
   get isEnabled() {
     return this.enabled;
   }
 
-  private refresh() {
+  private computeVisibility(spec: Landmark, z: number): { visible: boolean; isSpotlight: boolean } {
+    if (!this.enabled) return { visible: false, isSpotlight: false };
+    const focus = this.activeSceneId ? spec.sceneFocus?.[this.activeSceneId] : undefined;
+    const isSpotlight = Boolean(focus && this.highlightedIds.has(spec.id));
+
+    if (this.activeSceneId) {
+      // 战役场景演播期间：聚焦本幕点名的战略/战术支点，以及不冲突的省级大重镇
+      if (isSpotlight) return { visible: true, isSpotlight: true };
+      if (spec.tier === 'strategic' && z >= 5.6) return { visible: true, isSpotlight: false };
+      return { visible: false, isSpotlight: false };
+    }
+
+    if (spec.tier === 'strategic') return { visible: z >= 5.5, isSpotlight: false };
+    return { visible: z >= 6.85, isSpotlight: false };
+  }
+
+  reserveIcons(arbiter: LabelArbiter) {
     const z = this.map.getZoom();
-
     for (const item of this.items) {
-      const { spec, el, noteEl } = item;
-      const focus = this.activeSceneId ? spec.sceneFocus?.[this.activeSceneId] : undefined;
-      const isSpotlight = Boolean(focus && (this.highlightedIds.size === 0 || this.highlightedIds.has(spec.id)));
-
-      // 三级比例尺控制：
-      // L1 (z < 5.45): 默认全部隐藏，保持全国总览干净；仅当前正在演播的战役特写点名的地标可跨级显示
-      // L2 (5.45 <= z < 6.75): 显示战略重镇（贵阳、昆明、泸州、宜宾、松潘等）+ 当前战役关联战术点
-      // L3 (z >= 6.75): 战略重镇与战术渡口要隘全部显示
-      let visible = false;
-      if (this.enabled) {
-        if (isSpotlight) {
-          visible = z >= 4.9;
-        } else if (focus) {
-          visible = z >= 5.35;
-        } else if (spec.tier === 'strategic') {
-          visible = z >= 5.45;
-        } else {
-          visible = z >= 6.75;
-        }
+      const { visible, isSpotlight } = this.computeVisibility(item.spec, z);
+      item.el.classList.toggle('is-hidden', !visible);
+      item.el.classList.toggle('is-spotlight', isSpotlight);
+      if (visible) {
+        arbiter.reserveIcon(item.spec.coord, isSpotlight ? 10 : 7);
       }
+    }
+  }
 
-      el.classList.toggle('is-hidden', !visible);
-      el.classList.toggle('is-spotlight', isSpotlight);
-      el.dataset.tone = focus ? focus.tone : '';
+  placeLabels(arbiter: LabelArbiter) {
+    const z = this.map.getZoom();
+    const preferredMap: Record<string, 'left' | 'right' | 'center-top' | 'center-bottom'> = {
+      right: 'left',
+      left: 'right',
+      top: 'center-top',
+      bottom: 'center-bottom',
+    };
 
-      const nextNote = isSpotlight && focus ? focus.note : '';
-      if (noteEl.textContent !== nextNote) {
-        noteEl.textContent = nextNote;
+    // 先排聚光重镇（如奇袭贵阳、佯逼昆明、松潘受阻），再排普通参照城池
+    const ordered = this.items.slice().sort((a, b) => {
+      const sa = a.el.classList.contains('is-spotlight') ? 0 : 1;
+      const sb = b.el.classList.contains('is-spotlight') ? 0 : 1;
+      return sa - sb;
+    });
+
+    for (const item of ordered) {
+      const { visible, isSpotlight } = this.computeVisibility(item.spec, z);
+      if (!visible) continue;
+
+      const focus = this.activeSceneId ? item.spec.sceneFocus?.[this.activeSceneId] : undefined;
+      item.el.dataset.tone = focus ? focus.tone : '';
+      const noteText = isSpotlight && focus ? focus.note : '';
+      if (item.noteEl.textContent !== noteText) item.noteEl.textContent = noteText;
+      item.el.classList.toggle('has-note', Boolean(noteText));
+
+      const nameW = estimateTextWidth(item.spec.name, isSpotlight ? 12 : 11, 8);
+      const noteW = noteText ? estimateTextWidth(noteText, 10, 12) : 0;
+      const w = Math.max(nameW, noteW);
+      const h = noteText ? 32 : 17;
+
+      const choice = arbiter.placeAroundPoint(item.spec.coord, w, h, {
+        gap: isSpotlight ? 11 : 8,
+        preferred: item.spec.anchor ? preferredMap[item.spec.anchor] : undefined,
+        maxRouteHits: isSpotlight ? 2 : 0,
+      });
+
+      if (choice) {
+        item.bodyEl.dataset.align = choice.align;
+        item.bodyEl.style.left = `calc(50% + ${choice.dx.toFixed(1)}px)`;
+        item.bodyEl.style.top = `calc(50% + ${choice.dy.toFixed(1)}px)`;
+        item.bodyEl.classList.remove('is-folded');
+      } else {
+        item.bodyEl.classList.add('is-folded');
       }
-      el.classList.toggle('has-note', Boolean(nextNote));
     }
   }
 }

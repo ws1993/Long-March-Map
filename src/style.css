@@ -51,9 +51,19 @@ body {
   width: 100%;
 }
 
-.lm-map {
+/**
+ * 地图容器用 id 选择器：maplibre-gl.css 里的 `.maplibregl-map` 同样给了
+ * `position: relative`，两者权重相同。生产构建把第三方 CSS 排在 style.css
+ * 之后，同权重下它会赢——容器拿不到 `inset: 0`，高度塌成 0，整张地图不可见
+ * （dev 阶段 CSS 按 import 顺序注入，所以只在构建版暴露）。
+ * id 选择器把权重抬到 (1,1,0)，与打包顺序无关。
+ * `font: inherit` 同理：否则容器字体被 maplibre 的 12px Helvetica 顶掉，
+ * DOM Marker 的字号与构建前后不一致。
+ */
+#map.lm-map {
   position: absolute;
   inset: 0;
+  font: inherit;
   background: var(--bg);
 }
 
@@ -194,7 +204,7 @@ body {
 .lm-layers {
   top: 96px;
   left: 24px;
-  width: 226px;
+  width: 278px;
   overflow: hidden;
 }
 
@@ -227,32 +237,60 @@ body {
 .lm-layers__body {
   padding: 0 14px 14px;
   display: grid;
-  gap: 14px;
-  max-height: 60vh;
-  overflow: auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 13px;
+  /* 面板随视口长高，常态下不出滚动条；确实超高时才出现，用与面板同调的细滚动条 */
+  max-height: clamp(240px, calc(100vh - 312px), 680px);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(126, 158, 190, 0.36) transparent;
+}
+
+.lm-layers__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lm-layers__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lm-layers__body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(126, 158, 190, 0.32);
+}
+
+.lm-layers__body::-webkit-scrollbar-thumb:hover {
+  background: rgba(126, 158, 190, 0.54);
 }
 
 .lm-layers__body section h3 {
-  margin: 0 0 8px;
+  margin: 0 0 7px;
   font-size: 10.5px;
   font-weight: 500;
   letter-spacing: 0.16em;
   color: var(--ink-dim);
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .lm-legend {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
 }
 
 .lm-legend__item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   padding: 5px 6px;
   border-radius: 7px;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--ink-mid);
   cursor: pointer;
   transition: background 0.18s var(--ease);
@@ -265,6 +303,15 @@ body {
 
 .lm-legend__item.is-off {
   opacity: 0.35;
+}
+
+/* 图例文字一律单行：放不下就省略，全称由 title 悬停给出 */
+.lm-legend__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .lm-legend__swatch {
@@ -290,7 +337,9 @@ body {
 
 .lm-legend__count {
   margin-left: auto;
-  font-size: 10px;
+  flex: none;
+  white-space: nowrap;
+  font-size: 9.5px;
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -351,65 +400,67 @@ body {
 
 .lm-node__label {
   position: absolute;
-  left: 100%;
-  top: 50%;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-left: 8px;
-  padding: 2px 7px 2px 5px;
-  border-radius: 5px;
-  font-size: 11px;
-  letter-spacing: 0.02em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   white-space: nowrap;
-  color: var(--ink);
-  background: rgba(7, 11, 16, 0.86);
-  border: 1px solid rgba(126, 158, 190, 0.22);
-  border-left: 2px solid var(--node-color);
-  box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.85);
+  color: #eef4fa;
+  /* 常态使用深色文字描边光晕（Halo），不套黑底方框，彻底避免遮挡地形与路线 */
+  background: transparent;
+  border: 1px solid transparent;
+  text-shadow:
+    0 0 4px rgba(5, 8, 13, 0.98),
+    0 0 8px rgba(5, 8, 13, 0.95),
+    0 1px 3px rgba(0, 0, 0, 0.98),
+    1px 0 2px rgba(5, 8, 13, 0.96),
+    -1px 0 2px rgba(5, 8, 13, 0.96);
   opacity: 0;
-  transform: translate(-5px, -50%);
-  transition: opacity 0.22s var(--ease), transform 0.22s var(--ease-out);
   pointer-events: none;
+  transition: opacity 0.2s var(--ease), background 0.2s var(--ease);
 }
 
-.lm-node__tag {
-  font-style: normal;
-  font-size: 9.5px;
-  padding: 0.5px 4px;
-  border-radius: 3px;
-  color: var(--node-color);
-  background: color-mix(in srgb, var(--node-color) 15%, transparent);
-  letter-spacing: 0.04em;
+.lm-node__label[data-align='left'] {
+  transform: translate(0, -50%);
 }
 
-.lm-node.is-label-shown .lm-node__label,
+.lm-node__label[data-align='right'] {
+  transform: translate(-100%, -50%);
+}
+
+.lm-node__label[data-align='center-top'] {
+  transform: translate(-50%, -100%);
+}
+
+.lm-node__label[data-align='center-bottom'] {
+  transform: translate(-50%, 0);
+}
+
+.lm-node.is-label-shown .lm-node__label {
+  opacity: 0.95;
+}
+
+/* 悬停或选中时浮现精致轻底衬，强化当前交互反馈 */
 .lm-node:hover .lm-node__label,
 .lm-node.is-selected .lm-node__label {
-  opacity: 0.94;
-  transform: translate(0, -50%);
+  opacity: 1;
+  padding: 2px 7px;
+  background: rgba(8, 12, 18, 0.92);
+  border-color: color-mix(in srgb, var(--node-color) 55%, rgba(255, 255, 255, 0.15));
+  box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.9);
 }
 
 .lm-node:hover,
 .lm-node.is-selected {
-  z-index: 12;
+  z-index: 14;
 }
 
-/* 位于屏幕右侧或避让翻转的节点，标签朝左 */
-.lm-node.flip-left .lm-node__label {
-  left: auto;
-  right: 100%;
-  margin-left: 0;
-  margin-right: 8px;
-  border-left: 1px solid rgba(126, 158, 190, 0.22);
-  border-right: 2px solid var(--node-color);
-  transform: translate(5px, -50%);
-}
-
-.lm-node.flip-left.is-label-shown .lm-node__label,
-.lm-node.flip-left:hover .lm-node__label,
-.lm-node.flip-left.is-selected .lm-node__label {
-  transform: translate(0, -50%);
+/* 战役场景中非本幕焦点的背景节点适度压低对比度，不与主角抢夺视线 */
+.lm-node.is-scene-muted:not(:hover):not(.is-selected) {
+  opacity: 0.48;
 }
 
 .lm-node:hover .lm-node__dot,
@@ -1203,36 +1254,60 @@ body {
   cursor: default;
 }
 
-/* 态势标签 */
+/* 态势标签：去方框，采用军史图集纯净描边字 + 侧翼四向避让定位 */
+.maplibregl-marker:has(> .sit-label) {
+  z-index: 7;
+}
+
 .sit-label {
-  font-size: 11px;
-  letter-spacing: 0.03em;
-  padding: 2px 7px;
-  border-radius: 4px;
-  white-space: nowrap;
-  background: rgba(6, 10, 14, 0.82);
-  border: 1px solid rgba(126, 158, 190, 0.2);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
   pointer-events: none;
-  transform: translate(-50%, -50%);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
-.sit-label--red {
-  color: #ffc8c3;
-  border-color: rgba(224, 68, 62, 0.42);
+.sit-label__txt {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  text-shadow:
+    0 0 4px rgba(5, 8, 14, 0.99),
+    0 0 9px rgba(5, 8, 14, 0.96),
+    0 1px 3px rgba(0, 0, 0, 0.98),
+    1px 0 2px rgba(5, 8, 14, 0.96),
+    -1px 0 2px rgba(5, 8, 14, 0.96);
 }
 
-.sit-label--enemy {
-  color: #c3ddff;
-  border-color: rgba(75, 134, 198, 0.42);
+.sit-label__txt[data-align='left'] {
+  transform: translate(0, -50%);
 }
 
-/* 常驻地名：中性灰，作为地理参照而不是战斗单位 */
-.sit-label--neutral {
+.sit-label__txt[data-align='right'] {
+  transform: translate(-100%, -50%);
+}
+
+.sit-label__txt[data-align='center-top'] {
+  transform: translate(-50%, -100%);
+}
+
+.sit-label__txt[data-align='center-bottom'] {
+  transform: translate(-50%, 0);
+}
+
+.sit-label--red .sit-label__txt {
+  color: #ffccc6;
+}
+
+.sit-label--enemy .sit-label__txt {
+  color: #bddcff;
+}
+
+.sit-label--neutral .sit-label__txt {
   color: #b8c6d4;
-  border-color: rgba(126, 158, 190, 0.28);
-  background: rgba(6, 10, 14, 0.66);
-  letter-spacing: 0.08em;
 }
 
 /* ---------------------------------------------------------------- 数据说明弹层 */
@@ -1435,7 +1510,7 @@ body.lm-mode-situation .lm-layers {
   .lm-layers {
     top: 84px;
     left: 12px;
-    width: 170px;
+    width: 230px;
   }
   .lm-topbar {
     padding: 12px 14px;
@@ -1533,6 +1608,7 @@ body.lm-mode-situation .lm-layers {
 
 .lm-linekey {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
 }
 
@@ -1540,13 +1616,23 @@ body.lm-mode-situation .lm-layers {
   margin: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  font-size: 11.5px;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--ink-mid);
 }
 
+/* 读图行单行显示，超长才省略，全称由 title 给出 */
+.lm-linekey__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .lm-linekey__sample {
-  width: 22px;
+  width: 20px;
   flex: none;
   height: 0;
   border-top: 2.5px solid var(--ink-mid);
@@ -1574,9 +1660,9 @@ body.lm-mode-situation .lm-layers {
 
 .lm-linekey p.lm-linekey__note {
   display: block;
-  margin-top: 3px;
-  font-size: 10.5px;
-  line-height: 1.6;
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.55;
   color: var(--ink-dim);
 }
 
@@ -1690,24 +1776,20 @@ body.lm-mode-situation .lm-layers {
   white-space: nowrap;
 }
 
-.lm-head-badge__pill[data-slot='0'] {
-  left: 10px;
-  bottom: 8px;
+.lm-head-badge__pill[data-align='left'] {
+  transform: translate(0, -50%);
 }
 
-.lm-head-badge__pill[data-slot='1'] {
-  left: 10px;
-  top: 8px;
+.lm-head-badge__pill[data-align='right'] {
+  transform: translate(-100%, -50%);
 }
 
-.lm-head-badge__pill[data-slot='2'] {
-  right: 10px;
-  bottom: 8px;
+.lm-head-badge__pill[data-align='center-top'] {
+  transform: translate(-50%, -100%);
 }
 
-.lm-head-badge__pill[data-slot='3'] {
-  right: 10px;
-  top: 8px;
+.lm-head-badge__pill[data-align='center-bottom'] {
+  transform: translate(-50%, 0);
 }
 
 .lm-head-badge.is-arrived {
@@ -1952,45 +2034,44 @@ body.lm-mode-situation .lm-layers {
 
 .lm-landmark__body {
   position: absolute;
-  left: 100%;
-  top: 50%;
-  transform: translate(7px, -50%);
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 2px 7px;
+  padding: 1px 4px;
   border-radius: 5px;
-  background: rgba(8, 13, 20, 0.84);
-  border: 1px solid rgba(142, 178, 213, 0.26);
+  background: transparent;
+  border: 1px solid transparent;
+  text-shadow:
+    0 0 4px rgba(5, 8, 13, 0.98),
+    0 0 8px rgba(5, 8, 13, 0.95),
+    0 1px 3px rgba(0, 0, 0, 0.98);
   white-space: nowrap;
   pointer-events: none;
+  transition: opacity 0.2s var(--ease);
 }
 
-.lm-landmark--tactical:not(.is-spotlight) .lm-landmark__body {
-  padding: 1px 5px;
-  background: rgba(8, 13, 20, 0.68);
-  border-color: rgba(142, 178, 213, 0.15);
+.lm-landmark__body.is-folded {
+  opacity: 0;
+  visibility: hidden;
 }
 
-.lm-landmark--anchor-left .lm-landmark__body {
-  left: auto;
-  right: 100%;
-  transform: translate(-7px, -50%);
+.lm-landmark__body[data-align='left'] {
+  transform: translate(0, -50%);
+  text-align: left;
+}
+
+.lm-landmark__body[data-align='right'] {
+  transform: translate(-100%, -50%);
   text-align: right;
 }
 
-.lm-landmark--anchor-top .lm-landmark__body {
-  left: 50%;
-  top: auto;
-  bottom: 100%;
-  transform: translate(-50%, -6px);
+.lm-landmark__body[data-align='center-top'] {
+  transform: translate(-50%, -100%);
   text-align: center;
 }
 
-.lm-landmark--anchor-bottom .lm-landmark__body {
-  left: 50%;
-  top: 100%;
-  transform: translate(-50%, 6px);
+.lm-landmark__body[data-align='center-bottom'] {
+  transform: translate(-50%, 0);
   text-align: center;
 }
 
@@ -2008,9 +2089,10 @@ body.lm-mode-situation .lm-layers {
 }
 
 .lm-landmark.is-spotlight .lm-landmark__body {
-  border-color: rgba(240, 183, 62, 0.55);
-  background: rgba(15, 16, 18, 0.92);
-  box-shadow: 0 8px 22px -8px rgba(0, 0, 0, 0.95);
+  padding: 2.5px 8px;
+  border-color: rgba(240, 183, 62, 0.48);
+  background: rgba(12, 14, 18, 0.84);
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.95);
 }
 
 .lm-landmark.is-spotlight[data-tone='fortress'] .lm-landmark__body {
@@ -2122,18 +2204,31 @@ body.lm-mode-situation .lm-layers {
 
 .lm-clash__label {
   position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translate(-50%, 4px);
-  padding: 1.5px 7px;
+  padding: 1.5px 6px;
   border-radius: 999px;
   font-size: 10.5px;
   font-weight: 600;
   color: #ffe4dc;
-  background: rgba(42, 14, 14, 0.9);
-  border: 1px solid rgba(255, 130, 110, 0.55);
+  background: rgba(38, 12, 12, 0.85);
+  border: 1px solid rgba(255, 130, 110, 0.48);
   white-space: nowrap;
   box-shadow: 0 4px 12px -4px rgba(0, 0, 0, 0.9);
+}
+
+.lm-clash__label[data-align='left'] {
+  transform: translate(0, -50%);
+}
+
+.lm-clash__label[data-align='right'] {
+  transform: translate(-100%, -50%);
+}
+
+.lm-clash__label[data-align='center-top'] {
+  transform: translate(-50%, -100%);
+}
+
+.lm-clash__label[data-align='center-bottom'] {
+  transform: translate(-50%, 0);
 }
 
 .sit-label.is-hidden {
@@ -2445,5 +2540,30 @@ body.lm-mode-situation .lm-layers {
   .lm-follow-btn {
     padding: 4px 9px;
     font-size: 10.5px;
+  }
+}
+
+/* 笔记本等低视口：回落到紧凑间距，尽量把整份图例留在面板内，不触发滚动 */
+@media (max-height: 940px) {
+  .lm-layers__body {
+    gap: 11px;
+  }
+  .lm-layers__body section h3 {
+    margin: 0 0 6px;
+  }
+  .lm-legend {
+    gap: 1px;
+  }
+  .lm-legend__item {
+    padding: 4px 6px;
+  }
+  .lm-linekey {
+    gap: 3px;
+  }
+  .lm-linekey p.lm-linekey__note {
+    margin-top: 4px;
+  }
+  .lm-layers__body > section.lm-linekey {
+    padding-bottom: 8px;
   }
 }

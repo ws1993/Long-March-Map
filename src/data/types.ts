@@ -272,4 +272,6 @@ export interface ArrowPlotStyle {
   headWidth?: number;
   headLength?: number;
   tailTaper?: number;
+  /** 两点直连时的微弧弯曲系数（正偏左、负偏右） */
+  arcRatio?: number;
 }

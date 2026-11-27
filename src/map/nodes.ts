@@ -1,20 +1,15 @@
 /**
- * 节点标注：用 DOM Marker 而不是 maplibre 的 symbol layer。
+ * 节点标注层：接入全局 LabelArbiter 四向避让与场景焦点过滤。
  *
- * 理由：
- * 1. 中文标签无需 glyph 字体服务，离线可用；
- * 2. 可以做丰富的悬停/选中状态与 CSS 动效；
- * 3. 节点总量 50 个，DOM 完全撑得住。
- *
- * 文字可见性与防重叠策略：
- * - 一级骨架节点（13 个）在全缩放级别默认常显短名称，用户无需对照图例即可读懂主干地标；
- * - 放大到 zoom >= 5.3 / 6.5 时逐级展开二、三级节点的图标与名称；
- * - 每次缩放/平移/选中时在屏幕像素空间做一次轻量矩形碰撞检测（优先保留选中项与高级别节点，
- *   左右两侧自动择空翻转），既保证地标可读，又避免低缩放密集区文字叠压。
+ * 减负与防压盖规则：
+ * - 图面标签采用高对比深色光晕描边字（Halo），仅在悬停或选中时浮现深色胶囊底衬，消除满屏黑块；
+ * - 进入战役场景时，仅当前节拍点名的 `focusNodes`（及当前选中节点）参与常显排布，
+ *   其余背景节点退回安静图标态（悬停仍可即时显字），彻底消除无关诗词/历史节点抢戏。
  */
 import { Marker } from 'maplibre-gl';
 import type { Map as MlMap } from 'maplibre-gl';
 import type { NodeKind, StoryNode } from '../data/types';
+import { estimateTextWidth, type LabelArbiter } from './labelArbiter';
 
 export const KIND_META: Record<NodeKind, { label: string; shortTag: string; color: string; icon: string }> = {
   meeting: {
@@ -55,7 +50,6 @@ export const KIND_META: Record<NodeKind, { label: string; shortTag: string; colo
   },
 };
 
-/** 小比例尺（全国总览 zoom < 5.45）仅常显名称的 6 个战略起止与转折支点，避免全局拥挤 */
 const MACRO_LABEL_IDS = new Set([
   'n-ruijin',
   'n-zunyi',
@@ -65,7 +59,6 @@ const MACRO_LABEL_IDS = new Set([
   'n-huining',
 ]);
 
-/** 一级骨架节点：全缩放级别显示圆点，中比例尺（zoom >= 5.45）起全部常显名称 */
 const CORE_IDS = new Set([
   'n-ruijin',
   'n-xiangjiang',
@@ -82,7 +75,6 @@ const CORE_IDS = new Set([
   'n-jialing',
 ]);
 
-/** 图面紧凑短名（详情抽屉与悬停提示仍保留完整标题） */
 const SHORT_NAMES: Record<string, string> = {
   'n-ruijin': '瑞金出发',
   'n-hejiachong': '何家冲出发',
@@ -96,7 +88,6 @@ const SHORT_NAMES: Record<string, string> = {
   'n-wuqi': '吴起镇会师',
 };
 
-/** 二级：战役、会议、会师、诗词，zoom ≥ 5.2 显示图标，zoom ≥ 5.4 参与常显标签排布 */
 const SECONDARY_KINDS = new Set<NodeKind>(['meeting', 'battle', 'join', 'poem']);
 
 export interface NodeMarker {
@@ -104,6 +95,7 @@ export interface NodeMarker {
   shortName: string;
   marker: Marker;
   el: HTMLDivElement;
+  labelEl: HTMLElement;
   tier: 1 | 2 | 3;
 }
 
@@ -111,17 +103,7 @@ export interface NodeLayerOptions {
   map: MlMap;
   nodes: StoryNode[];
   onSelect: (node: StoryNode) => void;
-}
-
-interface Box {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
-
-function overlaps(a: Box, b: Box): boolean {
-  return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+  onRequestLayout?: () => void;
 }
 
 export class NodeLayer {
@@ -129,10 +111,15 @@ export class NodeLayer {
   private cutoff = Number.NEGATIVE_INFINITY;
   private hiddenKinds: Set<NodeKind> = new Set();
   private selectedId: string | null = null;
-  private zoom = 0;
+  private sceneActive = false;
+  private sceneFocusIds = new Set<string>();
   private map: MlMap;
+  private onRequestLayout?: () => void;
 
   constructor(opts: NodeLayerOptions) {
+    this.map = opts.map;
+    this.onRequestLayout = opts.onRequestLayout;
+
     for (const node of opts.nodes) {
       const meta = KIND_META[node.kind];
       const tier: 1 | 2 | 3 = CORE_IDS.has(node.id) ? 1 : SECONDARY_KINDS.has(node.kind) ? 2 : 3;
@@ -147,9 +134,7 @@ export class NodeLayer {
         <span class="lm-node__dot">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">${meta.icon}</svg>
         </span>
-        <span class="lm-node__label">
-          <i class="lm-node__tag">${meta.shortTag}</i>${escapeHtml(shortName)}
-        </span>
+        <span class="lm-node__label" data-align="left" style="left:calc(50% + 12px);top:50%">${escapeHtml(shortName)}</span>
       `;
       el.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -158,100 +143,137 @@ export class NodeLayer {
       el.title = `${node.name}（${meta.label}）｜${node.place}${
         node.confidence === 'high' ? '' : '｜史实存疑，点击查看详情'
       }`;
+      const labelEl = el.querySelector('.lm-node__label') as HTMLElement;
       const marker = new Marker({ element: el, anchor: 'center' }).setLngLat(node.coord).addTo(opts.map);
-      this.items.push({ node, shortName, marker, el, tier });
+      this.items.push({ node, shortName, marker, el, labelEl, tier });
     }
-
-    this.map = opts.map;
-    this.zoom = opts.map.getZoom();
-    this.refreshLayout();
-    opts.map.on('zoom', () => {
-      this.zoom = opts.map.getZoom();
-      this.refreshLayout();
-    });
-    opts.map.on('moveend', () => this.refreshLayout());
   }
 
-  private refreshLayout() {
-    // 三级比例尺分级：
-    // L1 (zoom < 5.45): 只显示 13 个骨架小圆点，且仅 6 个战略节点常显精简地名
-    // L2 (5.45 <= zoom < 6.75): 显示一/二级节点图标，展开 13 个骨架节点名称（及高优先级二级节点名称）
-    // L3 (zoom >= 6.75): 三级节点图标与名称全部参与防重叠排布
-    const isL1 = this.zoom < 5.45;
-    const maxIconTier = this.zoom >= 6.75 ? 3 : this.zoom >= 5.45 ? 2 : 1;
-    const maxLabelTier = this.zoom >= 6.75 ? 3 : this.zoom >= 5.85 ? 2 : 1;
-    const width = this.map.getContainer().clientWidth || 1280;
+  setSceneFilter(active: boolean, focusNodeIds: string[] = []) {
+    this.sceneActive = active;
+    this.sceneFocusIds = new Set(focusNodeIds);
+  }
 
-    const occupied: Box[] = [];
-    const candidates: { item: NodeMarker; cx: number; cy: number; isFuture: boolean; isSelected: boolean }[] = [];
+  private isIconVisible(item: NodeMarker, zoom: number): boolean {
+    if (this.hiddenKinds.has(item.node.kind)) return false;
+    if (item.node.id === this.selectedId) return true;
+    if (this.sceneActive && this.sceneFocusIds.has(item.node.id)) return true;
+    const maxIconTier = zoom >= 6.75 ? 3 : zoom >= 5.45 ? 2 : 1;
+    return item.tier <= maxIconTier;
+  }
 
+  /** 第一步：向全局仲裁器登记可见节点圆点，防止其他标签盖住圆点 */
+  reserveIcons(arbiter: LabelArbiter) {
+    const z = this.map.getZoom();
+    const isL1 = z < 5.45;
     for (const item of this.items) {
       const hiddenByKind = this.hiddenKinds.has(item.node.kind);
-      const isSelected = item.node.id === this.selectedId;
-      const collapsed = !isSelected && item.tier > maxIconTier;
+      const visible = this.isIconVisible(item, z);
+      const isFocus = !this.sceneActive || this.sceneFocusIds.has(item.node.id) || item.node.id === this.selectedId;
 
       item.el.classList.toggle('is-hidden', hiddenByKind);
-      item.el.classList.toggle('is-collapsed', collapsed);
-      item.el.classList.toggle('is-compact', isL1 && !isSelected);
+      item.el.classList.toggle('is-collapsed', !hiddenByKind && !visible);
+      item.el.classList.toggle('is-compact', isL1 && item.node.id !== this.selectedId);
+      item.el.classList.toggle('is-scene-muted', this.sceneActive && !isFocus);
 
-      if (hiddenByKind || collapsed) {
+      if (visible) {
+        arbiter.reserveIcon(item.node.coord, isL1 ? 8 : 11);
+      } else {
+        item.el.classList.remove('is-label-shown');
+      }
+    }
+  }
+
+  /** 第二步（最高优先）：若用户点选了某个节点，优先锁定其标签位置 */
+  placeSelected(arbiter: LabelArbiter) {
+    if (!this.selectedId) return;
+    const item = this.items.find((x) => x.node.id === this.selectedId);
+    if (!item || this.hiddenKinds.has(item.node.kind)) return;
+    const w = estimateTextWidth(item.shortName, 12, 16);
+    const choice = arbiter.placeAroundPoint(item.node.coord, w, 20, { gap: 13, forceIfSelected: true });
+    if (choice) {
+      this.applyPlacement(item, choice.dx, choice.dy, choice.align);
+      item.el.classList.add('is-label-shown');
+    }
+  }
+
+  /** 第三步：在场景标绘与重镇落位之后，排布符合当前比例尺与场景焦点条件的节点文字 */
+  placeLabels(arbiter: LabelArbiter) {
+    const z = this.map.getZoom();
+    const isL1 = z < 5.45;
+    const maxLabelTier = z >= 6.85 ? 3 : z >= 5.9 ? 2 : 1;
+    const vw = this.map.getContainer().clientWidth || 1280;
+
+    const candidates: { item: NodeMarker; isFuture: boolean; isSceneFocus: boolean }[] = [];
+
+    for (const item of this.items) {
+      if (item.node.id === this.selectedId) continue;
+      if (!this.isIconVisible(item, z)) {
         item.el.classList.remove('is-label-shown');
         continue;
       }
 
-      const pt = this.map.project(item.node.coord);
-      occupied.push({ x0: pt.x - 11, y0: pt.y - 10, x1: pt.x + 11, y1: pt.y + 10 });
-
-      const isFuture = item.el.classList.contains('is-future');
-      const eligibleAtL1 = MACRO_LABEL_IDS.has(item.node.id);
-      const labelEligible = isSelected || (isL1 ? eligibleAtL1 : item.tier <= maxLabelTier);
-
-      if (labelEligible) {
-        candidates.push({ item, cx: pt.x, cy: pt.y, isFuture, isSelected });
+      const isSceneFocus = this.sceneActive && this.sceneFocusIds.has(item.node.id);
+      let eligible = false;
+      if (this.sceneActive) {
+        // 战役特写演播中，仅本幕点名的关键节点常显文字，其余一律折叠（悬停可看）
+        eligible = isSceneFocus;
+      } else if (isL1) {
+        eligible = MACRO_LABEL_IDS.has(item.node.id);
       } else {
-        item.el.classList.remove('is-label-shown');
-        item.el.classList.toggle('flip-left', pt.x > width * 0.68);
+        eligible = item.tier <= maxLabelTier;
       }
+
+      if (!eligible) {
+        item.el.classList.remove('is-label-shown');
+        // 为悬停态预设不溢出的默认朝向
+        const pt = this.map.project(item.node.coord);
+        const hoverLeft = pt.x > vw * 0.72;
+        this.applyPlacement(item, hoverLeft ? -12 : 12, 0, hoverLeft ? 'right' : 'left');
+        continue;
+      }
+
+      candidates.push({
+        item,
+        isFuture: item.el.classList.contains('is-future'),
+        isSceneFocus,
+      });
     }
 
-    // 优先级：当前选中 > 一级骨架节点 > 已到达节点 > 二/三级节点
     candidates.sort((a, b) => {
-      if (a.isSelected !== b.isSelected) return a.isSelected ? -1 : 1;
+      if (a.isSceneFocus !== b.isSceneFocus) return a.isSceneFocus ? -1 : 1;
       if (a.item.tier !== b.item.tier) return a.item.tier - b.item.tier;
       if (a.isFuture !== b.isFuture) return a.isFuture ? 1 : -1;
       return 0;
     });
 
     for (const c of candidates) {
-      // 估算标签宽高（含类型小徽章 + 短名称）
-      const labelW = c.item.shortName.length * 12 + 44;
-      const labelH = 21;
-      const preferLeft = c.cx > width * 0.72;
-      const sides: boolean[] = preferLeft ? [true, false] : [false, true];
-
-      let placed = false;
-      for (const left of sides) {
-        const box: Box = left
-          ? { x0: c.cx - 15 - labelW, y0: c.cy - labelH / 2, x1: c.cx - 15, y1: c.cy + labelH / 2 }
-          : { x0: c.cx + 15, y0: c.cy - labelH / 2, x1: c.cx + 15 + labelW, y1: c.cy + labelH / 2 };
-
-        if (c.isSelected || !occupied.some((o) => overlaps(box, o))) {
-          c.item.el.classList.toggle('flip-left', left);
-          c.item.el.classList.add('is-label-shown');
-          occupied.push({ x0: box.x0 - 3, y0: box.y0 - 2, x1: box.x1 + 3, y1: box.y1 + 2 });
-          placed = true;
-          break;
-        }
-      }
-
-      if (!placed) {
+      const fontPx = isL1 ? 10.5 : 11.5;
+      const w = estimateTextWidth(c.item.shortName, fontPx, 10);
+      const choice = arbiter.placeAroundPoint(c.item.node.coord, w, 18, {
+        gap: isL1 ? 10 : 12,
+        maxRouteHits: c.isSceneFocus ? 2 : 1,
+      });
+      if (choice) {
+        this.applyPlacement(c.item, choice.dx, choice.dy, choice.align);
+        c.item.el.classList.add('is-label-shown');
+      } else {
         c.item.el.classList.remove('is-label-shown');
-        c.item.el.classList.toggle('flip-left', preferLeft);
       }
     }
   }
 
-  /** 时间轴联动：未来节点降为"待发生"状态 */
+  private applyPlacement(
+    item: NodeMarker,
+    dx: number,
+    dy: number,
+    align: 'left' | 'right' | 'center-top' | 'center-bottom',
+  ) {
+    item.labelEl.dataset.align = align;
+    item.labelEl.style.left = `calc(50% + ${dx.toFixed(1)}px)`;
+    item.labelEl.style.top = `calc(50% + ${dy.toFixed(1)}px)`;
+  }
+
   setDateCutoff(dateStr: string) {
     const nextCutoff = Date.parse(`${dateStr}T00:00:00Z`);
     if (Number.isNaN(nextCutoff)) return;
@@ -266,7 +288,7 @@ export class NodeLayer {
         changed = true;
       }
     }
-    if (changed) this.refreshLayout();
+    if (changed) this.onRequestLayout?.();
   }
 
   setSelected(id: string | null) {
@@ -274,12 +296,12 @@ export class NodeLayer {
     for (const item of this.items) {
       item.el.classList.toggle('is-selected', item.node.id === id);
     }
-    this.refreshLayout();
+    this.onRequestLayout?.();
   }
 
   setVisible(kinds: Set<NodeKind>) {
     this.hiddenKinds = new Set((Object.keys(KIND_META) as NodeKind[]).filter((k) => !kinds.has(k)));
-    this.refreshLayout();
+    this.onRequestLayout?.();
   }
 
   destroy() {

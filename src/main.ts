@@ -1,5 +1,5 @@
 /**
- * 应用主入口：装配地图 / 连续路线主轴 / 三级比例尺 LOD / 战略重镇地标 / 六大战役动态场景编排器。
+ * 应用主入口：统一调度路线主轴、三级比例尺控量、全局防压盖仲裁器（LabelArbiter）与六大战役动态剧场。
  */
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -14,6 +14,7 @@ import { CAMPAIGN_SCENES } from './data/scenes';
 import type { NodeKind, StoryNode } from './data/types';
 import { buildBaseStyle, loadDetailTerrains, loadTerrainMeta } from './map/basemap';
 import { OverviewEnemyLayer } from './map/enemyOverview';
+import { LabelArbiter } from './map/labelArbiter';
 import { LandmarkLayer } from './map/landmarks';
 import { KIND_META, NodeLayer } from './map/nodes';
 import { RouteLabelLayer } from './map/routeLabels';
@@ -33,7 +34,6 @@ import { Timeline } from './ui/timeline';
 
 const allNodes: StoryNode[] = [...centralRedNodes, ...otherNodes].sort((a, b) => a.date.localeCompare(b.date));
 
-/** 长征走廊的整体范围：江西瑞金 → 陕北吴起 → 川西草地 → 滇西北 */
 const HOME_BOUNDS: [[number, number], [number, number]] = [
   [98.2, 24.2],
   [117.2, 38.2],
@@ -68,7 +68,6 @@ async function boot() {
 
   await new Promise<void>((resolve) => map.on('load', () => resolve()));
 
-  // ---------------------------------------------------------------- 三级比例尺状态指示
   function syncScaleTier() {
     const z = map.getZoom();
     const tier = z < 5.45 ? 'l1' : z < 6.75 ? 'l2' : 'l3';
@@ -82,35 +81,74 @@ async function boot() {
             : '大比例尺 · 战役战术沙盘';
     }
   }
-  syncScaleTier();
-  map.on('zoom', syncScaleTier);
 
-  // ---------------------------------------------------------------- 图层与注记装配
+  // ---------------------------------------------------------------- 图层与全局防压盖仲裁器
   addRouteLayers(map);
   const enemyOverview = new OverviewEnemyLayer(map);
   addSituationLayers(map);
 
-  const landmarks = new LandmarkLayer(map);
-  const routeLabels = new RouteLabelLayer(map);
+  const arbiter = new LabelArbiter(map);
+  let layoutRaf = 0;
+
+  let landmarks!: LandmarkLayer;
+  let routeLabels!: RouteLabelLayer;
+  let nodeLayer!: NodeLayer;
+  let sceneDirector!: SceneDirector;
+
+  function runGlobalLayout() {
+    layoutRaf = 0;
+    if (!landmarks || !routeLabels || !nodeLayer || !sceneDirector) return;
+    arbiter.beginPass();
+
+    // 1. 先锁定全部可见图标点位，禁止任何文字盖住图标圆点
+    sceneDirector.reserveIcons(arbiter);
+    landmarks.reserveIcons(arbiter);
+    nodeLayer.reserveIcons(arbiter);
+
+    // 2. 按视觉优先级依次择空落位（并自动避开红军路线采样带）
+    nodeLayer.placeSelected(arbiter);
+    landmarks.placeLabels(arbiter);
+    sceneDirector.placeLabels(arbiter);
+    nodeLayer.placeLabels(arbiter);
+    routeLabels.placeLabels(arbiter);
+  }
+
+  function scheduleLayout() {
+    if (layoutRaf) return;
+    layoutRaf = requestAnimationFrame(runGlobalLayout);
+  }
+
+  landmarks = new LandmarkLayer(map, scheduleLayout);
+  routeLabels = new RouteLabelLayer(map, scheduleLayout);
+  nodeLayer = new NodeLayer({
+    map,
+    nodes: allNodes,
+    onSelect: (node) => openDetail(node),
+    onRequestLayout: scheduleLayout,
+  });
+
   let latestHeads: RouteHead[] = [];
   onRouteHeadsChange((heads) => {
     latestHeads = heads;
     routeLabels.updateHeads(heads);
   });
 
-  const nodeLayer = new NodeLayer({
-    map,
-    nodes: allNodes,
-    onSelect: (node) => openDetail(node),
+  syncScaleTier();
+  map.on('zoom', () => {
+    syncScaleTier();
+    scheduleLayout();
   });
+  map.on('move', scheduleLayout);
 
   // ---------------------------------------------------------------- 场景编排器与时间轴
   let timeline!: Timeline;
 
-  const sceneDirector = new SceneDirector({
+  sceneDirector = new SceneDirector({
     map,
     enemyOverview,
     landmarks,
+    nodeLayer,
+    routeLabels,
     homeBounds: HOME_BOUNDS,
     homePadding: HOME_PADDING,
     onSelectBeatDate: (isoDate, autoPlay) => {
@@ -118,6 +156,7 @@ async function boot() {
       timeline.setDate(isoDate, true);
       if (autoPlay && !timeline.isPlaying) timeline.play();
     },
+    onRequestLayout: scheduleLayout,
   });
 
   timeline = new Timeline({
@@ -130,7 +169,13 @@ async function boot() {
       updateRouteLayers(map, tsMs, Boolean(meta.jump));
       enemyOverview.setDate(tsMs);
       nodeLayer.setDateCutoff(iso);
-      sceneDirector.updateAt(tsMs, latestHeads, timeline ? timeline.isPlaying : false, timeline ? timeline.currentSpeed : 1);
+      sceneDirector.updateAt(
+        tsMs,
+        latestHeads,
+        timeline ? timeline.isPlaying : false,
+        timeline ? timeline.currentSpeed : 1,
+      );
+      scheduleLayout();
     },
   });
 
@@ -139,6 +184,7 @@ async function boot() {
   enemyOverview.setDate(initTs);
   nodeLayer.setDateCutoff(timeline.currentDate);
   sceneDirector.updateAt(initTs, latestHeads, false, 1);
+  runGlobalLayout();
 
   const stopFlow = startRouteFlow(map);
 
@@ -201,7 +247,7 @@ async function boot() {
       (a) => `
       <div class="lm-legend__item" data-army="${a.id}">
         <span class="lm-legend__swatch" style="background:${a.color}"></span>
-        <span>${a.short}</span>
+        <span class="lm-legend__label" title="${a.short}">${a.short}</span>
         <span class="lm-legend__count">${routeSegments.filter((s) => s.armyId === a.id).length} 段</span>
       </div>`,
     )
@@ -216,6 +262,7 @@ async function boot() {
       el.classList.toggle('is-off', hiddenArmies.has(id));
       const ids = armies.map((a) => a.id).filter((aid) => !hiddenArmies.has(aid));
       setRouteArmyFilter(map, ids);
+      arbiter.setVisibleArmies(new Set(ids));
       routeLabels.setVisible(new Set(ids));
     });
   });
@@ -253,7 +300,7 @@ async function boot() {
           <span class="lm-legend__tick" style="color:${meta.color}">
             <svg viewBox="0 0 24 24">${meta.icon}</svg>
           </span>
-          <span>${meta.label}</span>
+          <span class="lm-legend__label" title="${meta.label}">${meta.label}</span>
           <span class="lm-legend__count">${count}</span>
         </div>`;
     })
@@ -278,7 +325,6 @@ async function boot() {
     layersBody.style.display = expanded ? 'none' : 'grid';
   });
 
-  // ---------------------------------------------------------------- 顶部剧场与总览入口
   document.getElementById('btn-situation')?.addEventListener('click', () => {
     closeDetail();
     sceneDirector.openTheater();
@@ -289,7 +335,6 @@ async function boot() {
     sceneDirector.resetToOverview();
   });
 
-  // ---------------------------------------------------------------- 关于数据弹层
   const about = document.getElementById('about') as HTMLElement;
   const aboutBody = document.getElementById('about-body') as HTMLElement;
   aboutBody.innerHTML = renderAbout();
@@ -308,7 +353,6 @@ async function boot() {
     }
   });
 
-  // ---------------------------------------------------------------- 入场展开
   loading.classList.add('is-done');
   setTimeout(() => loading.remove(), 700);
 
@@ -318,11 +362,13 @@ async function boot() {
     map,
     timeline,
     sceneDirector,
+    arbiter,
     enemyOverview,
     landmarks,
     routeLabels,
     nodes: allNodes,
     openDetail,
+    runGlobalLayout,
     stopFlow,
     selectedId: () => selectedId,
   };

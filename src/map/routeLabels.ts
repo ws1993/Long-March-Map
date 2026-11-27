@@ -1,14 +1,16 @@
 /**
- * 图面文字说明体系（全部走 DOM Marker，零外部字体服务依赖，离线完整可用）：
- * 1. 多锚点部队路线注记（ROUTE_LABELS）—— 长路线分段设多处指引，随缩放展开，不必靠图例辨色；
- * 2. 行军推进圆点实时挂签（updateHeads）—— 时间轴推进时实时标出「哪支部队 · 正在执行哪段行动」，
- *    多军交汇时自动在屏幕四个象限错开避让；
- * 3. 底图省名与关键水系注记（PROVINCE_LABELS / RIVER_LABELS）—— 提供历史地理空间方位参照。
+ * 图面路线注记、行军推进挂签与底图省河注记。
+ *
+ * 防压盖减负改进：
+ * 1. 彻底移除已到达终点（status === 'arrived'）的「胜利会师·抵达…」挂签，避免与会师节点重复叠压；
+ * 2. 进入六大战役特写场景时，自动隐去静态双行路线说明卡与行军挂签，把图面空间完全留给战役态势；
+ * 3. 非场景状态下路线说明卡亦受屏幕碰撞控制，不再压盖节点与主线。
  */
 import { Marker } from 'maplibre-gl';
 import type { Map as MlMap } from 'maplibre-gl';
 import { armies } from '../data/armies';
 import type { LonLat } from '../data/types';
+import { estimateTextWidth, type LabelArbiter } from './labelArbiter';
 import type { RouteHead } from './routes';
 
 export interface RouteLabel {
@@ -22,69 +24,46 @@ export interface RouteLabel {
 }
 
 export const ROUTE_LABELS: RouteLabel[] = [
-  // 红一方面军（横跨 11 省，设 4 处区域锚点）
   {
     armyId: 'red1',
     coord: [114.25, 24.85],
     anchor: 'left',
     title: '红一方面军（中央红军）',
-    sub: '瑞金出发 · 突破四道封锁线',
-    offset: [4, 4],
+    sub: '瑞金出发 · 二万五千里',
+    offset: [6, 4],
   },
   {
     armyId: 'red1',
     coord: [103.35, 25.05],
     anchor: 'left',
     title: '红一方面军',
-    sub: '兵临贵阳 · 西进巧渡金沙江',
-    offset: [4, 6],
-    minZoom: 4.9,
+    sub: '西进云南 · 巧渡金沙江',
+    offset: [6, 6],
+    minZoom: 5.55,
   },
   {
     armyId: 'red1',
-    coord: [101.65, 28.75],
+    coord: [101.55, 28.75],
     anchor: 'right',
     title: '红一方面军',
-    sub: '强渡大渡河 · 翻夹金山过草地',
-    offset: [-6, 0],
-    minZoom: 5.1,
-  },
-  {
-    armyId: 'red1',
-    coord: [107.35, 36.68],
-    anchor: 'left',
-    title: '红一方面军（陕甘支队）',
-    sub: '越六盘山 · 抵达陕北吴起镇',
-    offset: [8, -4],
-    minZoom: 4.8,
-  },
-
-  // 红二十五军（2 处锚点）
-  {
-    armyId: 'red25',
-    coord: [111.55, 34.18],
-    anchor: 'left',
-    title: '红二十五军',
-    sub: '何家冲出发 · 创建鄂豫陕根据地',
-    offset: [4, -6],
+    sub: '强渡大渡河 · 爬雪山过草地',
+    offset: [-8, 0],
+    minZoom: 5.7,
   },
   {
     armyId: 'red25',
-    coord: [107.55, 35.25],
+    coord: [111.55, 34.25],
     anchor: 'left',
     title: '红二十五军',
-    sub: '西进陇东 · 最先抵达陕北永坪镇',
-    offset: [6, 6],
-    minZoom: 5.2,
+    sub: '何家冲出发 · 最先抵达陕北',
+    offset: [6, -6],
   },
-
-  // 红四方面军（2 处锚点）
   {
     armyId: 'red4',
     coord: [105.55, 32.85],
     anchor: 'left',
     title: '红四方面军',
-    sub: '强渡嘉陵江 · 撤离川陕苏区西进',
+    sub: '强渡嘉陵江 · 三过草地',
     offset: [6, -4],
   },
   {
@@ -92,18 +71,16 @@ export const ROUTE_LABELS: RouteLabel[] = [
     coord: [100.35, 30.72],
     anchor: 'right',
     title: '红四方面军',
-    sub: '南下川康边 · 甘孜会师后三过草地北上',
-    offset: [-6, 6],
-    minZoom: 4.9,
+    sub: '转战川康 · 甘孜会师北上',
+    offset: [-8, 6],
+    minZoom: 5.6,
   },
-
-  // 红二方面军（2 处锚点）
   {
     armyId: 'red2',
     coord: [110.25, 28.45],
     anchor: 'left',
-    title: '红二、六军团（红二方面军）',
-    sub: '桑植突围 · 经湘黔乌蒙山回旋',
+    title: '红二方面军（红二、六军团）',
+    sub: '桑植突围 · 转战乌蒙金沙',
     offset: [8, 0],
   },
   {
@@ -111,9 +88,9 @@ export const ROUTE_LABELS: RouteLabel[] = [
     coord: [99.05, 28.95],
     anchor: 'right',
     title: '红二方面军',
-    sub: '石鼓渡金沙江 · 经康南至甘孜北上将台堡',
-    offset: [-6, 0],
-    minZoom: 4.8,
+    sub: '石鼓渡江 · 经康南至将台堡',
+    offset: [-8, 0],
+    minZoom: 5.6,
   },
 ];
 
@@ -126,7 +103,6 @@ interface GeoAnnotation {
 }
 
 const GEO_ANNOTATIONS: GeoAnnotation[] = [
-  // 途经主要省区（含历史政区西康）
   { text: '江 西', coord: [115.65, 27.35], kind: 'province' },
   { text: '湖 南', coord: [111.85, 27.65], kind: 'province' },
   { text: '广 西', coord: [108.95, 24.55], kind: 'province' },
@@ -140,7 +116,6 @@ const GEO_ANNOTATIONS: GeoAnnotation[] = [
   { text: '甘 肃', coord: [104.15, 35.85], kind: 'province' },
   { text: '宁 夏', coord: [106.15, 37.35], kind: 'province' },
 
-  // 关键江河参照（按比例尺分级浮现）
   { text: '长江', coord: [106.55, 29.55], kind: 'river', minZoom: 4.8, rotate: -18 },
   { text: '黄河', coord: [110.35, 36.15], kind: 'river', minZoom: 4.8, rotate: 82 },
   { text: '金沙江', coord: [101.65, 26.22], kind: 'river', minZoom: 5.45, rotate: -15 },
@@ -159,9 +134,8 @@ const ARMY_BADGE_NAME: Record<string, string> = {
 };
 
 function compactStageLabel(s: string): string {
-  const parts = s.split(' · ');
-  if (parts.length <= 2 && s.length <= 15) return s;
-  return parts.slice(0, 2).join(' · ');
+  const first = s.split(' · ')[0] ?? s;
+  return first.length > 10 ? first.slice(0, 10) : first;
 }
 
 export class RouteLabelLayer {
@@ -169,15 +143,17 @@ export class RouteLabelLayer {
   private geoItems: { spec: GeoAnnotation; el: HTMLElement; marker: Marker }[] = [];
   private headPool = new Map<
     string,
-    { marker: Marker; el: HTMLDivElement; nameEl: HTMLElement; stageEl: HTMLElement }
+    { marker: Marker; el: HTMLDivElement; pillEl: HTMLElement; nameEl: HTMLElement; stageEl: HTMLElement }
   >();
   private visibleArmies = new Set<string>(armies.map((a) => a.id));
   private geoEnabled = true;
-  private situationMode = false;
+  private sceneActive = false;
   private latestHeads: RouteHead[] = [];
 
-  constructor(private map: MlMap) {
-    // 1. 底图省名与河流注记（最底层 DOM 注记）
+  constructor(
+    private map: MlMap,
+    private onRequestLayout?: () => void,
+  ) {
     for (const spec of GEO_ANNOTATIONS) {
       const el = document.createElement('div');
       el.className = `lm-geo-label lm-geo-label--${spec.kind}`;
@@ -189,7 +165,6 @@ export class RouteLabelLayer {
       this.geoItems.push({ spec, el, marker });
     }
 
-    // 2. 多锚点部队路线注记
     for (const spec of ROUTE_LABELS) {
       const army = armies.find((a) => a.id === spec.armyId);
       if (!army) continue;
@@ -211,127 +186,105 @@ export class RouteLabelLayer {
       this.routeItems.push({ spec, el, marker });
     }
 
-    // 3. 四支主力实时行军头挂签池（外层交由 MapLibre transform 定位，内层 pill 控制四象限偏移）
     for (const army of armies) {
       const el = document.createElement('div');
       el.className = 'lm-head-badge is-hidden';
       el.style.setProperty('--head-color', army.color);
       el.innerHTML = `
-        <div class="lm-head-badge__pill" data-slot="0">
+        <div class="lm-head-badge__pill" data-align="left" style="left:11px;top:0">
           <span class="lm-head-badge__army"></span>
           <span class="lm-head-badge__stage"></span>
         </div>
       `;
+      const pillEl = el.querySelector('.lm-head-badge__pill') as HTMLElement;
       const nameEl = el.querySelector('.lm-head-badge__army') as HTMLElement;
       const stageEl = el.querySelector('.lm-head-badge__stage') as HTMLElement;
       nameEl.textContent = ARMY_BADGE_NAME[army.id] ?? army.short;
 
-      const marker = new Marker({ element: el, anchor: 'center' })
-        .setLngLat([106, 30])
-        .addTo(this.map);
-      this.headPool.set(army.id, { marker, el, nameEl, stageEl });
-    }
-
-    this.syncVisibility();
-    this.map.on('zoom', () => {
-      this.syncVisibility();
-      this.layoutHeadBadges();
-    });
-    this.map.on('moveend', () => this.layoutHeadBadges());
-  }
-
-  private syncVisibility() {
-    const z = this.map.getZoom();
-    const isL1 = z < 5.45;
-
-    for (const item of this.routeItems) {
-      // 小比例尺仅显示每军的主锚点（无 minZoom 的 4 处），且收起副标题行；中大比例尺展开分段锚点
-      const minZ = item.spec.minZoom !== undefined ? Math.max(5.55, item.spec.minZoom) : undefined;
-      const zoomOk = minZ === undefined || z >= minZ;
-      const show = !this.situationMode && this.visibleArmies.has(item.spec.armyId) && zoomOk;
-      item.el.classList.toggle('is-off', !show);
-      item.el.classList.toggle('is-compact', isL1);
-    }
-
-    for (const g of this.geoItems) {
-      const zoomOk = g.spec.minZoom === undefined || z >= g.spec.minZoom;
-      const show = !this.situationMode && this.geoEnabled && zoomOk;
-      g.el.classList.toggle('is-off', !show);
+      const marker = new Marker({ element: el, anchor: 'center' }).setLngLat([106, 30]).addTo(this.map);
+      this.headPool.set(army.id, { marker, el, pillEl, nameEl, stageEl });
     }
   }
 
-  /** 更新四支队伍行军推进头的实时番号阶段标签，并在多军靠近时自动错开象限 */
+  setSceneActive(active: boolean) {
+    this.sceneActive = active;
+  }
+
   updateHeads(heads: RouteHead[]) {
     this.latestHeads = heads;
-    this.layoutHeadBadges();
+    this.onRequestLayout?.();
   }
 
-  private layoutHeadBadges() {
+  /** 在统一排版阶段更新省河注记、行军挂签与静态路线签（全部受碰撞与场景减法约束） */
+  placeLabels(arbiter: LabelArbiter) {
     const z = this.map.getZoom();
     const isL1 = z < 5.45;
-    const activeByArmy = new Map<string, RouteHead>();
-    for (const h of this.latestHeads) {
-      // 小比例尺下已抵达终点的部队隐藏行军挂签（终点已有会师锚点），避免全国视野末端堆叠
-      if (isL1 && h.status === 'arrived') continue;
-      if (!this.situationMode && this.visibleArmies.has(h.army.id)) {
-        activeByArmy.set(h.army.id, h);
-      }
+
+    // 1. 底图省区与主要河流
+    for (const g of this.geoItems) {
+      const zoomOk = g.spec.minZoom === undefined || z >= g.spec.minZoom;
+      const show = this.geoEnabled && zoomOk;
+      g.el.classList.toggle('is-off', !show);
     }
 
-    // 计算屏幕像素位置，若两军推进头距离 < 110px 则分配不同象限槽位，避免会师前后重叠
-    const placedPts: { x: number; y: number; slot: number }[] = [];
-
+    // 2. 正在行进中的部队推进圆点挂签（已到达终点或处于战役特写场景中时一律隐藏，绝不堆叠）
     for (const [armyId, entry] of this.headPool) {
-      const h = activeByArmy.get(armyId);
-      if (!h) {
+      const h = this.latestHeads.find(
+        (x) => x.army.id === armyId && x.status === 'marching',
+      );
+      if (!h || this.sceneActive || !this.visibleArmies.has(armyId)) {
         entry.el.classList.add('is-hidden');
         continue;
       }
 
-      entry.el.classList.remove('is-hidden');
-      entry.el.classList.toggle('is-arrived', h.status === 'arrived');
-      entry.el.classList.toggle('is-compact', isL1);
       const stageText = compactStageLabel(h.label);
-      if (entry.stageEl.textContent !== stageText) {
-        entry.stageEl.textContent = stageText;
-      }
+      if (entry.stageEl.textContent !== stageText) entry.stageEl.textContent = stageText;
+      entry.el.classList.toggle('is-compact', isL1);
       entry.marker.setLngLat(h.coord);
+      arbiter.reserveIcon(h.coord, 8);
 
-      const pt = this.map.project(h.coord);
-      let slot = 0;
-      const usedSlots = new Set<number>();
-      for (const prev of placedPts) {
-        if (Math.hypot(pt.x - prev.x, pt.y - prev.y) < 110) usedSlots.add(prev.slot);
+      const fullText = isL1 ? entry.nameEl.textContent ?? '' : `${entry.nameEl.textContent} ${stageText}`;
+      const w = estimateTextWidth(fullText, 11, 18);
+      const choice = arbiter.placeAroundPoint(h.coord, w, 20, { gap: 11 });
+      if (choice) {
+        entry.pillEl.dataset.align = choice.align;
+        entry.pillEl.style.left = `${choice.dx.toFixed(1)}px`;
+        entry.pillEl.style.top = `${choice.dy.toFixed(1)}px`;
+        entry.el.classList.remove('is-hidden');
+      } else {
+        entry.el.classList.add('is-hidden');
       }
-      while (usedSlots.has(slot) && slot < 3) slot++;
-      placedPts.push({ x: pt.x, y: pt.y, slot });
+    }
 
-      const pill = entry.el.firstElementChild as HTMLElement | null;
-      if (pill) pill.dataset.slot = String(slot);
+    // 3. 静态部队路线指引签：战役场景中隐藏；平时仅在无碰撞处显示
+    for (const item of this.routeItems) {
+      const zoomOk = item.spec.minZoom === undefined || z >= item.spec.minZoom;
+      if (this.sceneActive || !this.visibleArmies.has(item.spec.armyId) || !zoomOk) {
+        item.el.classList.add('is-off');
+        continue;
+      }
+      item.el.classList.toggle('is-compact', isL1);
+      const w = estimateTextWidth(item.spec.title, 11.5, 28);
+      const h = isL1 ? 18 : 32;
+      const choice = arbiter.placeAroundPoint(item.spec.coord, w, h, {
+        gap: 6,
+        preferred: item.spec.anchor === 'right' ? 'right' : 'left',
+      });
+      item.el.classList.toggle('is-off', !choice);
     }
   }
 
-  /** 与图例开关同步：被关掉的部队，其路线注记与行军挂签一并隐去 */
   setVisible(ids: Set<string>) {
     this.visibleArmies = new Set(ids);
-    this.syncVisibility();
-    this.layoutHeadBadges();
+    this.onRequestLayout?.();
   }
 
-  /** 底图省名/水系注记显隐开关 */
   setGeoEnabled(on: boolean) {
     this.geoEnabled = on;
-    this.syncVisibility();
+    this.onRequestLayout?.();
   }
 
   get isGeoEnabled() {
     return this.geoEnabled;
-  }
-
-  /** 态势模式下整层收起 */
-  setMode(situation: boolean) {
-    this.situationMode = situation;
-    this.syncVisibility();
-    this.layoutHeadBadges();
   }
 }

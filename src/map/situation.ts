@@ -1,18 +1,14 @@
 /**
- * 敌我态势图层：把态势标绘定义按阶段内动画进度 `phaseProgress ∈ [0, 1]` 实时生成为 GeoJSON + 标签 + 激战脉冲点。
- *
- * 图层叠放关系：
- *   - 战役水系底纹（sit-hydro-line）与敌我态势面/描边置于红军已走实线之下或半透明交叠，
- *     保证「长征主路线全程不断且居视觉主轴」，同时清晰呈现围追堵截与穿插破局动作。
+ * 敌我态势图层：输出燕尾倒钩箭头、中轴高光脊线、细轨刺齿防线、水系与法向避让标签锚点。
  */
 import type { GeoJSONSource, Map as MlMap } from 'maplibre-gl';
 import type { LonLat, PlotGraphic, Situation, SituationPhase } from '../data/types';
 import {
   assembleArea,
-  attackArrow,
+  attackArrowDetailed,
   blockPoint,
   defenseLine,
-  pincerArrows,
+  pincerArrowsDetailed,
   pointAlongLL,
   sliceLineLL,
 } from '../plot/plot';
@@ -26,8 +22,8 @@ export interface SideStyle {
 }
 
 export const SIDE_STYLE: Record<'red' | 'enemy', SideStyle> = {
-  red: { fill: 'rgba(224,68,62,0.30)', line: '#f0574f', glow: 'rgba(224,68,62,0.55)', label: '#ffd7d3' },
-  enemy: { fill: 'rgba(75,134,198,0.26)', line: '#6ea6de', glow: 'rgba(75,134,198,0.5)', label: '#d3e6ff' },
+  red: { fill: 'rgba(224,68,62,0.24)', line: '#ff786f', glow: 'rgba(224,68,62,0.45)', label: '#ffd7d3' },
+  enemy: { fill: 'rgba(75,134,198,0.22)', line: '#86bcf0', glow: 'rgba(75,134,198,0.42)', label: '#d3e6ff' },
 };
 
 export interface SituationClashPoint {
@@ -38,10 +34,22 @@ export interface SituationClashPoint {
   alpha: number;
 }
 
+export interface SituationLabelSpec {
+  id: string;
+  coord: LonLat;
+  /** 供屏幕空间仲裁器沿图形法向向两侧偏置的切线方向参考点 */
+  tangentTo?: LonLat;
+  text: string;
+  side: 'red' | 'enemy' | 'neutral';
+  size?: number;
+  alpha?: number;
+}
+
 export interface SituationGeometry {
   polygons: GeoJSON.FeatureCollection;
+  spines: GeoJSON.FeatureCollection;
   lines: GeoJSON.FeatureCollection;
-  labels: { coord: LonLat; text: string; side: 'red' | 'enemy' | 'neutral'; size?: number; alpha?: number }[];
+  labels: SituationLabelSpec[];
   clashes: SituationClashPoint[];
 }
 
@@ -65,7 +73,6 @@ function closeRing(ring: LonLat[]): LonLat[] {
   return ring;
 }
 
-/** 按图形种类与阵营分配默认交错出场时间窗，让敌方先构筑合围、红军随即穿插破局 */
 function defaultAnimWindow(g: PlotGraphic): [number, number] {
   if (g.anim) return g.anim;
   switch (g.kind) {
@@ -92,22 +99,29 @@ function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - c, 3);
 }
 
-/** 把一帧态势的标绘按 phaseProgress ∈ [0, 1] 转成动态几何 */
 export function buildSituationGeometry(
   phase: SituationPhase,
   scale = 1,
   phaseProgress = 1,
 ): SituationGeometry {
   const polygons: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+  const spines: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
   const lines: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-  const labels: SituationGeometry['labels'] = [];
+  const labels: SituationLabelSpec[] = [];
   const clashes: SituationClashPoint[] = [];
 
-  const sx = (style: { width: number; headWidth?: number; headLength?: number; tailTaper?: number }) => ({
+  const sx = (style: {
+    width: number;
+    headWidth?: number;
+    headLength?: number;
+    tailTaper?: number;
+    arcRatio?: number;
+  }) => ({
     width: style.width * scale,
     headWidth: style.headWidth !== undefined ? style.headWidth * scale : undefined,
     headLength: style.headLength !== undefined ? style.headLength * scale : undefined,
     tailTaper: style.tailTaper,
+    arcRatio: style.arcRatio,
   });
 
   for (const g of phase.graphics) {
@@ -119,32 +133,51 @@ export function buildSituationGeometry(
 
     switch (g.kind) {
       case 'arrow': {
-        const ring = attackArrow(g.path, sx(g.style), gp);
-        if (ring.length > 2) polygons.features.push(poly(ring, { side: g.side, gid: g.id, alpha }));
+        const res = attackArrowDetailed(g.path, sx(g.style), gp);
+        if (res.ring.length > 2) {
+          polygons.features.push(poly(res.ring, { side: g.side, gid: g.id, kind: 'arrow', alpha }));
+        }
+        if (res.spine.length >= 2) {
+          spines.features.push(line(res.spine, { side: g.side, gid: `${g.id}-sp`, alpha }));
+        }
         break;
       }
       case 'pincer': {
-        const rings = pincerArrows(g.start, g.end, { ...sx(g.style), spreadRatio: g.style.spreadRatio }, gp);
-        rings.forEach((r, i) => {
-          if (r.length > 2) polygons.features.push(poly(r, { side: g.side, gid: `${g.id}-${i}`, alpha }));
+        const results = pincerArrowsDetailed(
+          g.start,
+          g.end,
+          { ...sx(g.style), spreadRatio: g.style.spreadRatio },
+          gp,
+        );
+        results.forEach((res, i) => {
+          if (res.ring.length > 2) {
+            polygons.features.push(poly(res.ring, { side: g.side, gid: `${g.id}-${i}`, kind: 'pincer', alpha }));
+          }
+          if (res.spine.length >= 2) {
+            spines.features.push(line(res.spine, { side: g.side, gid: `${g.id}-sp-${i}`, alpha }));
+          }
         });
         break;
       }
       case 'assemble': {
         const ring = assembleArea(g.center, g.radiusX * scale, g.radiusY * scale, g.rotation ?? 0, 48, gp);
         if (ring.length > 2) {
-          polygons.features.push(poly(ring, { side: g.side, gid: g.id, outlineOnly: true, alpha }));
+          polygons.features.push(poly(ring, { side: g.side, gid: g.id, kind: 'assemble', outlineOnly: true, alpha }));
         }
         break;
       }
       case 'defense': {
         const ring = defenseLine(g.path, g.toothSize * scale, g.toothSide ?? 1, gp);
-        if (ring.length > 2) polygons.features.push(poly(ring, { side: g.side, gid: g.id, alpha }));
+        if (ring.length > 2) {
+          polygons.features.push(poly(ring, { side: g.side, gid: g.id, kind: 'defense', isDefense: true, alpha }));
+        }
         break;
       }
       case 'block': {
         const ring = blockPoint(g.center, g.size * scale, g.rotation ?? 0, gp);
-        if (ring.length > 2) polygons.features.push(poly(ring, { side: g.side, gid: g.id, alpha }));
+        if (ring.length > 2) {
+          polygons.features.push(poly(ring, { side: g.side, gid: g.id, kind: 'block', isDefense: true, alpha }));
+        }
         break;
       }
       case 'markLine': {
@@ -155,7 +188,7 @@ export function buildSituationGeometry(
         break;
       }
       case 'text': {
-        labels.push({ coord: g.coord, text: g.text, side: g.side, size: g.size, alpha });
+        labels.push({ id: g.id, coord: g.coord, text: g.text, side: g.side, size: g.size, alpha });
         break;
       }
       case 'clash': {
@@ -166,34 +199,61 @@ export function buildSituationGeometry(
         break;
     }
 
-    if (g.kind !== 'text' && g.kind !== 'clash' && 'label' in g && g.label && gp >= 0.25) {
-      const anchor = labelAnchor(g, gp);
-      const labelAlpha = Math.min(1, (gp - 0.25) / 0.45);
-      if (anchor) labels.push({ coord: anchor, text: g.label, side: g.side, size: 11, alpha: labelAlpha });
+    if (g.kind !== 'text' && g.kind !== 'clash' && 'label' in g && g.label && gp >= 0.32) {
+      const anchorInfo = labelAnchorWithTangent(g, gp);
+      const labelAlpha = Math.min(1, (gp - 0.32) / 0.42);
+      if (anchorInfo) {
+        labels.push({
+          id: `${g.id}-lbl`,
+          coord: anchorInfo.coord,
+          tangentTo: anchorInfo.tangentTo,
+          text: g.label,
+          side: g.side,
+          size: 11,
+          alpha: labelAlpha,
+        });
+      }
     }
   }
 
-  return { polygons, lines, labels, clashes };
+  return { polygons, spines, lines, labels, clashes };
 }
 
-function labelAnchor(g: PlotGraphic, progress = 1): LonLat | null {
+function labelAnchorWithTangent(
+  g: PlotGraphic,
+  progress = 1,
+): { coord: LonLat; tangentTo?: LonLat } | null {
   switch (g.kind) {
     case 'arrow': {
-      if (g.labelAt && progress > 0.7) return g.labelAt;
-      return pointAlongLL(g.path, 0.52 * progress);
+      if (g.labelAt && progress > 0.7) return { coord: g.labelAt };
+      const r0 = 0.46 * progress;
+      const r1 = Math.min(1, r0 + 0.14);
+      const p0 = pointAlongLL(g.path, r0);
+      const p1 = pointAlongLL(g.path, r1) ?? undefined;
+      return p0 ? { coord: p0, tangentTo: p1 } : null;
     }
     case 'pincer': {
-      const k = 0.5 * progress;
-      return [g.start[0] + (g.end[0] - g.start[0]) * k, g.start[1] + (g.end[1] - g.start[1]) * k];
+      const k = 0.45 * progress;
+      const coord: LonLat = [
+        g.start[0] + (g.end[0] - g.start[0]) * k,
+        g.start[1] + (g.end[1] - g.start[1]) * k,
+      ];
+      return { coord, tangentTo: g.end };
     }
     case 'assemble':
-      return g.center;
-    case 'defense':
-      return pointAlongLL(g.path, 0.5 * progress);
+      return { coord: g.center };
+    case 'defense': {
+      const p0 = pointAlongLL(g.path, 0.5 * progress);
+      const p1 = pointAlongLL(g.path, Math.min(1, 0.5 * progress + 0.15)) ?? undefined;
+      return p0 ? { coord: p0, tangentTo: p1 } : null;
+    }
     case 'block':
-      return g.center;
-    case 'markLine':
-      return pointAlongLL(g.path, 0.45 * progress);
+      return { coord: g.center };
+    case 'markLine': {
+      const p0 = pointAlongLL(g.path, 0.22 * progress);
+      const p1 = pointAlongLL(g.path, Math.min(1, 0.22 * progress + 0.12)) ?? undefined;
+      return p0 ? { coord: p0, tangentTo: p1 } : null;
+    }
     default:
       return null;
   }
@@ -203,13 +263,13 @@ const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
 
 export function addSituationLayers(map: MlMap) {
   map.addSource('sit-polygons', { type: 'geojson', data: empty });
+  map.addSource('sit-spines', { type: 'geojson', data: empty });
   map.addSource('sit-lines', { type: 'geojson', data: empty });
   map.addSource('sit-hydro', { type: 'geojson', data: empty });
 
-  // 放在 routes-past-glow 之前，使红军主线实线始终清晰浮在战役态势填充之上
   const beforeRoute = map.getLayer('routes-past-glow') ? 'routes-past-glow' : undefined;
 
-  // 水系高亮底纹
+  // 1. 战役水系高亮底纹
   map.addLayer(
     {
       id: 'sit-hydro-line',
@@ -217,41 +277,82 @@ export function addSituationLayers(map: MlMap) {
       source: 'sit-hydro',
       paint: {
         'line-color': PALETTE.waterHi,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.5, 10.5, 3.4],
-        'line-opacity': 0.92,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.5, 10.5, 3.2],
+        'line-opacity': 0.88,
       },
     },
     beforeRoute,
   );
 
-  // 面填充
+  // 2. 态势箭头外层柔和光晕（提升沙盘立体层次感）
+  map.addLayer(
+    {
+      id: 'sit-glow',
+      type: 'line',
+      source: 'sit-polygons',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['case', ['==', ['get', 'side'], 'red'], '#e0443e', '#4b86c6'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 5, 10, 11],
+        'line-blur': 4,
+        'line-opacity': ['*', 0.24, ['coalesce', ['get', 'alpha'], 1]],
+      },
+    },
+    beforeRoute,
+  );
+
+  // 3. 态势多边形主体填充（箭头半透明清透，细轨刺齿防线高实度锐利）
   map.addLayer(
     {
       id: 'sit-fill',
       type: 'fill',
       source: 'sit-polygons',
       paint: {
-        'fill-color': ['case', ['==', ['get', 'side'], 'red'], PALETTE.red, PALETTE.enemy],
+        'fill-color': ['case', ['==', ['get', 'side'], 'red'], '#e64c45', '#5592d4'],
         'fill-opacity': [
           '*',
           ['coalesce', ['get', 'alpha'], 1],
-          ['case', ['==', ['get', 'outlineOnly'], true], 0.08, 0.28],
+          [
+            'case',
+            ['==', ['get', 'outlineOnly'], true],
+            0.06,
+            ['==', ['get', 'isDefense'], true],
+            0.68,
+            0.22,
+          ],
         ],
       },
     },
     beforeRoute,
   );
 
-  // 面描边
+  // 4. 箭身内部中轴高光脊线（军史地图级精致矢量质感）
+  map.addLayer(
+    {
+      id: 'sit-spine',
+      type: 'line',
+      source: 'sit-spines',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['case', ['==', ['get', 'side'], 'red'], '#ffb8b0', '#b8dcff'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 0.9, 10, 1.5],
+        'line-opacity': ['*', 0.58, ['coalesce', ['get', 'alpha'], 1]],
+      },
+    },
+    beforeRoute,
+  );
+
+  // 5. 锐利矢量轮廓线
   map.addLayer(
     {
       id: 'sit-outline',
       type: 'line',
       source: 'sit-polygons',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': ['case', ['==', ['get', 'side'], 'red'], '#ff6b62', '#7fb6ec'],
-        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.2, 10, 2.2],
-        'line-opacity': ['*', 0.95, ['coalesce', ['get', 'alpha'], 1]],
+        'line-color': ['case', ['==', ['get', 'side'], 'red'], '#ff7d73', '#8cc2f6'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.15, 10, 1.85],
+        'line-opacity': ['*', 0.92, ['coalesce', ['get', 'alpha'], 1]],
         'line-dasharray': [
           'case',
           ['==', ['get', 'outlineOnly'], true],
@@ -263,17 +364,17 @@ export function addSituationLayers(map: MlMap) {
     beforeRoute,
   );
 
-  // 行动轴线 / 合围圈虚线
+  // 6. 合围圈虚线
   map.addLayer(
     {
       id: 'sit-axis',
       type: 'line',
       source: 'sit-lines',
       paint: {
-        'line-color': ['case', ['==', ['get', 'side'], 'red'], '#ff6b62', '#7fb6ec'],
-        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.6, 10, 2.4],
-        'line-dasharray': [4, 2.8],
-        'line-opacity': ['*', 0.88, ['coalesce', ['get', 'alpha'], 1]],
+        'line-color': ['case', ['==', ['get', 'side'], 'red'], '#ff7d73', '#8cc2f6'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 5.5, 1.3, 10, 2.0],
+        'line-dasharray': [3.6, 2.8],
+        'line-opacity': ['*', 0.72, ['coalesce', ['get', 'alpha'], 1]],
       },
     },
     beforeRoute,
@@ -282,12 +383,14 @@ export function addSituationLayers(map: MlMap) {
 
 export function updateSituationLayers(map: MlMap, geo: SituationGeometry, hydro?: GeoJSON.FeatureCollection) {
   (map.getSource('sit-polygons') as GeoJSONSource | undefined)?.setData(geo.polygons);
+  (map.getSource('sit-spines') as GeoJSONSource | undefined)?.setData(geo.spines);
   (map.getSource('sit-lines') as GeoJSONSource | undefined)?.setData(geo.lines);
   if (hydro) (map.getSource('sit-hydro') as GeoJSONSource | undefined)?.setData(hydro);
 }
 
 export function clearSituationLayers(map: MlMap) {
   (map.getSource('sit-polygons') as GeoJSONSource | undefined)?.setData(empty);
+  (map.getSource('sit-spines') as GeoJSONSource | undefined)?.setData(empty);
   (map.getSource('sit-lines') as GeoJSONSource | undefined)?.setData(empty);
   (map.getSource('sit-hydro') as GeoJSONSource | undefined)?.setData(empty);
 }
