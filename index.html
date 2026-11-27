@@ -45,16 +45,31 @@
             <div class="lm-legend" id="legend-armies"></div>
           </section>
           <section>
+            <h3>态势与底图注记</h3>
+            <div class="lm-legend" id="legend-extras">
+              <div class="lm-legend__item" id="toggle-enemy-ov">
+                <span class="lm-legend__swatch lm-legend__swatch--enemy"></span>
+                <span>国民党军围追态势</span>
+                <span class="lm-legend__count">联动</span>
+              </div>
+              <div class="lm-legend__item" id="toggle-geo-labels">
+                <span class="lm-legend__swatch lm-legend__swatch--geo"></span>
+                <span>省区与水系注记</span>
+                <span class="lm-legend__count">20</span>
+              </div>
+            </div>
+          </section>
+          <section>
             <h3>节点</h3>
             <div class="lm-legend lm-legend--check" id="legend-kinds"></div>
           </section>
           <section class="lm-linekey">
             <h3>读图</h3>
-            <p><i class="lm-linekey__sample lm-linekey__sample--past"></i>实线 · 已经走过</p>
-            <p><i class="lm-linekey__sample lm-linekey__sample--active"></i>呼吸虚线 · 正在行进</p>
-            <p><i class="lm-linekey__sample lm-linekey__sample--future"></i>淡虚线 · 尚未到达</p>
-            <p><i class="lm-linekey__sample lm-linekey__sample--head"></i>圆点 · 当前进至位置</p>
-            <p class="lm-linekey__note">图上每条线旁的注记标明了所属部队；虚线转实线为 0.8 秒渐变。</p>
+            <p><i class="lm-linekey__sample lm-linekey__sample--past"></i>实线 · 已走路线（连续推进）</p>
+            <p><i class="lm-linekey__sample lm-linekey__sample--future"></i>虚线 · 未走路线（前方保留）</p>
+            <p><i class="lm-linekey__sample lm-linekey__sample--head"></i>圆点挂签 · 当前位置与行动阶段</p>
+            <p><i class="lm-linekey__sample lm-linekey__sample--enemy"></i>蓝齿/箭头 · 敌军封锁线与围追</p>
+            <p class="lm-linekey__note">图面直接标出部队路线、骨架节点与实时行动；放大可展开更多地名。</p>
           </section>
         </div>
       </aside>

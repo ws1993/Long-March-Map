@@ -23,20 +23,23 @@ src/
     types.ts               数据模型：Army / RouteSegment / StoryNode / Situation
     armies.ts              四支队伍的元信息
     routes.ts              30 段行军路线（含途经点与日期）
+    enemy-overview.ts      总览主图随时间轴联动的 8 组国民党军围追堵截态势
     nodes-central.ts       红一方面军 33 个节点
     nodes-others.ts        其他三支队伍 + 三大主力会师 + 诗词 17 个节点
     situations/
-      index.ts             态势图登记表（新增战役只改这里）
-      sidu-chishui.ts      四渡赤水态势：双方兵力、5 个阶段的标绘
+      index.ts             态势图登记表与关键节点跳转映射
       xiangjiang.ts        湘江战役态势：三大阻击战、4 个阶段的标绘
+      sidu-chishui.ts      四渡赤水态势：双方兵力、5 个阶段的标绘
+      jinsha-dadu.ts       巧渡金沙江·飞夺泸定桥态势：4 个阶段的标绘
   plot/                    标绘几何库（纯函数，与地图引擎无耦合）
     geo.ts                 投影、重采样、切线法向、平滑、贝塞尔
     plot.ts                进攻箭头、钳击箭头、集结地、防御阵地、阻击点
   map/                     地图图层装配
     basemap.ts             底图样式（地形 + 省界 + 河流）
-    routes.ts              路线三段化（past / active / future）+ 虚线→实线过渡
-    nodes.ts               DOM 节点标注 + 分级显示
-    routeLabels.ts         图上部队注记（DOM Marker，随图例开关联动）
+    routes.ts              路线连续推进切分（past / lead / future）+ 跳转缓动
+    enemyOverview.ts       总览主图敌军态势层（随时间轴平滑淡入淡出）
+    nodes.ts               DOM 节点标注 + 分级常显与屏幕空间防重叠排布
+    routeLabels.ts         多锚点部队注记 + 行军推进实时挂签 + 省区水系注记
     situation.ts           态势标绘 → GeoJSON
   ui/                      界面
     timeline.ts            时间轴控制器
