@@ -183,8 +183,8 @@ export class SituationPanel {
     }
   }
 
-  /** 打开态势模式；传入 bundleIndex 可直达某场战役 */
-  open(bundleIndex = 0) {
+  /** 打开态势模式；传入 bundleIndex 与 phaseIndex 可直达某场战役的指定阶段 */
+  open(bundleIndex = 0, phaseIndex = 0) {
     this.root.classList.add('is-open');
     this.root.setAttribute('aria-hidden', 'false');
     this.bundleIndex = Math.max(0, Math.min(this.bundles.length - 1, bundleIndex));
@@ -193,7 +193,11 @@ export class SituationPanel {
     });
     this.renderHeader();
     this.renderSteps();
-    this.phaseIndex = 0;
+    const maxPhase = this.bundle.situation.phases.length - 1;
+    this.phaseIndex = Math.max(0, Math.min(maxPhase, phaseIndex));
+    this.stepBox.querySelectorAll<HTMLButtonElement>('.sit-step').forEach((btn, k) => {
+      btn.classList.toggle('is-on', k === this.phaseIndex);
+    });
     this.renderCard();
     this.applyDetailTerrain(this.bundle.situation.detailTerrain ?? null);
     const cam = this.bundle.situation.camera;

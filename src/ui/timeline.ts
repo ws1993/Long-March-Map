@@ -6,13 +6,18 @@ import type { StoryNode } from '../data/types';
 
 const DAY = 86400000;
 
+export interface TimelineChangeMeta {
+  /** 是否属于点击节点等离散跳转（可用于路线平滑追赶过渡） */
+  jump?: boolean;
+}
+
 export interface TimelineOptions {
   start: string;
   end: string;
   markers: StoryNode[];
   /** 1× 速度下播完整段所需秒数 */
   durationSeconds?: number;
-  onDate: (iso: string) => void;
+  onDate: (iso: string, tsMs: number, meta: TimelineChangeMeta) => void;
 }
 
 export class Timeline {
@@ -101,7 +106,7 @@ export class Timeline {
     return this.startTs + (this.endTs - this.startTs) * pc;
   }
 
-  setValue(pc: number, silent: boolean) {
+  setValue(pc: number, silent: boolean, meta: TimelineChangeMeta = {}) {
     this.current = Math.max(0, Math.min(1, pc));
     this.slider.value = String(Math.round(this.current * 1000));
     this.fill.style.width = `${this.current * 100}%`;
@@ -129,15 +134,15 @@ export class Timeline {
       this.markerEls[i].classList.toggle('is-passed', !Number.isNaN(nts) && nts <= ts);
     }
 
-    if (!silent) this.opts.onDate(iso);
-    else this.opts.onDate(iso);
+    void silent;
+    this.opts.onDate(iso, ts, meta);
   }
 
-  setDate(iso: string) {
+  setDate(iso: string, jump = true) {
     const ts = Date.parse(`${iso}T00:00:00Z`);
     if (Number.isNaN(ts)) return;
     this.pause();
-    this.setValue(this.toPc(ts), false);
+    this.setValue(this.toPc(ts), false, { jump });
   }
 
   play() {

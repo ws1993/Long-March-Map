@@ -1,157 +1,254 @@
 /**
  * 行军路线图层。
  *
- * 时间轴推进策略：把全部路线按当前日期切成三段
- *   past   —— 已经走过的整段（实色粗线 + 微光晕）
- *   active —— 正在走的那一段（截断到当前推进点，虚线流动动画）
- *   future —— 尚未走到的段（低透明度细线）
- * 每次日期变化只重建这三个小 GeoJSON（总量 < 50 段），代价很低。
+ * 连续推进策略：
+ * 1. 预先为每支部队的每个途经点分配单调递增的时间戳（首尾自动锚定分段起止时间，
+ *    无日期中间点按折线弧长插值），消除「首点缺日期整段空白」与「尾段停滞」两类断口；
+ * 2. 任一连续时刻 tsMs，直接在该部队当前行军位置 head 处将路线一分为二：
+ *    - past   —— 起点 → head（连续生长的实线 + 微光晕）
+ *    - lead   —— 紧贴 head 后方的一小段高亮前锋尾迹，强化推进方向感
+ *    - future —— head → 终点（始终保留的未走淡虚线，不再整段突然消失）
+ * 3. 支持大跨度跳转日期（如点击节点）时的平滑追赶过渡。
  */
-import type { Map as MlMap, GeoJSONSource } from 'maplibre-gl';
-import type { Army, RouteSegment } from '../data/types';
+import type { FilterSpecification, GeoJSONSource, Map as MlMap } from 'maplibre-gl';
+import type { Army, LonLat, RouteSegment } from '../data/types';
 import { armies } from '../data/armies';
-import { routeSegments } from '../data/routes';
+import { routeSegments, segmentsByArmy } from '../data/routes';
 import { PALETTE } from './basemap';
+
+const DAY_MS = 86400000;
+
+export interface RouteHead {
+  army: Army;
+  coord: LonLat;
+  label: string;
+  status: 'marching' | 'arrived';
+}
 
 export interface RouteSplit {
   past: GeoJSON.FeatureCollection;
-  active: GeoJSON.FeatureCollection;
+  lead: GeoJSON.FeatureCollection;
   future: GeoJSON.FeatureCollection;
-  /** 各部队当前行军头部位置（用于"当前位置"光点） */
-  heads: { army: Army; coord: [number, number]; label: string }[];
+  /** 各部队当前行军头部位置（用于圆点与实时番号阶段挂签） */
+  heads: RouteHead[];
 }
 
-/** 宽松日期解析：'1935-02' 视为当月 15 日，'1935-02-18' 精确 */
+export const ROUTE_LAYER_IDS = [
+  'routes-future-line',
+  'routes-past-glow',
+  'routes-past-line',
+  'routes-lead-glow',
+  'routes-lead-line',
+  'route-heads-halo',
+  'route-heads-circle',
+] as const;
+
+/** 宽松日期解析：'1935-02' 视为当月 15 日，'1935-02-18' 精确到 UTC 0 点 */
 export function parseLooseDate(s: string): number {
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(s);
   if (!m) return Number.NaN;
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, m[3] ? Number(m[3]) : 15);
 }
 
-const feature = (seg: RouteSegment, army: Army, coords: [number, number][], extra: Record<string, unknown> = {}) => ({
-  type: 'Feature' as const,
-  properties: {
-    id: seg.id,
-    armyId: seg.armyId,
-    color: army.color,
-    label: seg.label,
-    from: seg.from,
-    to: seg.to,
-    ...extra,
-  },
-  geometry: { type: 'LineString' as const, coordinates: coords },
-});
-
-/** 在分段内部按途经点日期插值，截断出"截至当前日期"的路径 */
-function truncate(seg: RouteSegment, now: number): { coords: [number, number][]; atEnd: boolean; head?: [number, number] } {
-  const pts = seg.path;
-  const full = pts.map((p) => p.coord);
-
-  // 收集带日期的途经点索引
-  const dated = pts
-    .map((p, i) => ({ i, t: p.date ? parseLooseDate(p.date) : Number.NaN }))
-    .filter((d) => !Number.isNaN(d.t));
-
-  if (dated.length === 0) {
-    // 没有日期信息：按分段区间线性插值
-    const t0 = parseLooseDate(seg.from);
-    const t1 = parseLooseDate(seg.to);
-    const k = Math.max(0, Math.min(1, (now - t0) / (t1 - t0 || 1)));
-    const idx = Math.min(full.length - 1, Math.floor(k * (full.length - 1)));
-    const frac = k * (full.length - 1) - idx;
-    const out = full.slice(0, idx + 1);
-    if (idx + 1 < full.length) {
-      const a = full[idx];
-      const b = full[idx + 1];
-      out.push([a[0] + (b[0] - a[0]) * frac, a[1] + (b[1] - a[1]) * frac]);
-      return { coords: out, atEnd: false, head: out[out.length - 1] };
-    }
-    return { coords: out, atEnd: true, head: out[out.length - 1] };
-  }
-
-  // 第一段日期之前：全部未走
-  if (now < dated[0].t) return { coords: [], atEnd: false };
-
-  const out: [number, number][] = [];
-  for (let i = 0; i < dated.length; i++) {
-    const cur = dated[i];
-    out.push(...full.slice(i === 0 ? 0 : dated[i - 1].i + 1, cur.i + 1));
-    const next = dated[i + 1];
-    if (!next || now < next.t) {
-      if (!next) return { coords: out, atEnd: true, head: out[out.length - 1] };
-      const k = (now - cur.t) / (next.t - cur.t);
-      // 沿 cur.i → next.i 之间的折线按弧长插值
-      const sub = full.slice(cur.i, next.i + 1);
-      const partial = partialPolyline(sub, Math.max(0, Math.min(1, k)));
-      out.push(...partial.slice(1));
-      return { coords: out, atEnd: false, head: out[out.length - 1] };
-    }
-  }
-  return { coords: out, atEnd: true, head: out[out.length - 1] };
+interface PreparedSegment {
+  seg: RouteSegment;
+  army: Army;
+  coords: LonLat[];
+  /** 与 coords 等长的单调不减时间戳（ms） */
+  times: number[];
+  /** 分段有效起始时间 */
+  tStart: number;
+  /** 分段有效结束时间（与下一段紧邻时无缝衔接到下一段起点） */
+  tEnd: number;
 }
 
-function partialPolyline(pts: [number, number][], k: number): [number, number][] {
-  if (pts.length < 2) return pts.slice();
-  const segLen: number[] = [];
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-    segLen.push(d);
-    total += d;
-  }
-  const target = total * k;
-  let acc = 0;
-  const out: [number, number][] = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const d = segLen[i - 1];
-    if (acc + d >= target) {
-      const t = d === 0 ? 0 : (target - acc) / d;
-      const a = pts[i - 1];
-      const b = pts[i];
-      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
-      return out;
+const PREPARED: PreparedSegment[] = (() => {
+  const out: PreparedSegment[] = [];
+  for (const army of armies) {
+    const segs = segmentsByArmy(army.id);
+    for (let sIdx = 0; sIdx < segs.length; sIdx++) {
+      const seg = segs[sIdx];
+      const nextSeg = segs[sIdx + 1];
+      const coords = seg.path.map((p) => p.coord);
+      const n = coords.length;
+      if (n < 2) continue;
+
+      const rawFrom = parseLooseDate(seg.from);
+      const rawTo = parseLooseDate(seg.to);
+      const nextFrom = nextSeg ? parseLooseDate(nextSeg.from) : Number.NaN;
+      const tStart = rawFrom;
+      const tEnd =
+        !Number.isNaN(nextFrom) && nextFrom >= rawTo && nextFrom - rawTo <= DAY_MS
+          ? nextFrom
+          : Math.max(rawFrom + DAY_MS * 0.5, rawTo);
+
+      const anchors: { idx: number; t: number }[] = [{ idx: 0, t: tStart }];
+      for (let i = 1; i < n - 1; i++) {
+        const dStr = seg.path[i].date;
+        const d = dStr ? parseLooseDate(dStr) : Number.NaN;
+        if (!Number.isNaN(d)) {
+          const prevT = anchors[anchors.length - 1].t;
+          anchors.push({ idx: i, t: Math.max(prevT, Math.min(tEnd, d)) });
+        }
+      }
+
+      const lastDateStr = seg.path[n - 1].date;
+      const lastExplicit = lastDateStr ? parseLooseDate(lastDateStr) : Number.NaN;
+      const prevT = anchors[anchors.length - 1].t;
+      const hasGenuineHold = !Number.isNaN(lastExplicit) && rawTo - lastExplicit >= 2 * DAY_MS;
+      const lastT = hasGenuineHold ? Math.max(prevT, Math.min(tEnd, lastExplicit)) : tEnd;
+      anchors.push({ idx: n - 1, t: Math.max(prevT, lastT) });
+
+      const times = new Array<number>(n).fill(tStart);
+      for (let a = 0; a < anchors.length; a++) {
+        times[anchors[a].idx] = anchors[a].t;
+        if (a + 1 >= anchors.length) break;
+        const i0 = anchors[a].idx;
+        const i1 = anchors[a + 1].idx;
+        const t0 = anchors[a].t;
+        const t1 = anchors[a + 1].t;
+        if (i1 <= i0 + 1) continue;
+
+        const dists: number[] = [0];
+        let sum = 0;
+        for (let k = i0 + 1; k <= i1; k++) {
+          sum += Math.hypot(coords[k][0] - coords[k - 1][0], coords[k][1] - coords[k - 1][1]);
+          dists.push(sum);
+        }
+        for (let k = i0 + 1; k < i1; k++) {
+          const ratio = sum > 0 ? dists[k - i0] / sum : (k - i0) / (i1 - i0);
+          times[k] = t0 + (t1 - t0) * ratio;
+        }
+      }
+
+      out.push({ seg, army, coords, times, tStart, tEnd });
     }
-    acc += d;
-    out.push(pts[i]);
   }
   return out;
+})();
+
+const lineFeature = (
+  id: string,
+  army: Army,
+  coords: LonLat[],
+  extra: Record<string, unknown> = {},
+): GeoJSON.Feature => ({
+  type: 'Feature',
+  properties: {
+    id,
+    armyId: army.id,
+    color: army.color,
+    ...extra,
+  },
+  geometry: { type: 'LineString', coordinates: coords },
+});
+
+/** 从已走路径末端截取固定地理弧长的前锋高亮尾迹（约 1.4° ≈ 140km） */
+function extractLeadTrail(walked: LonLat[], maxDeg = 1.4): LonLat[] {
+  if (walked.length < 2) return [];
+  const rev: LonLat[] = [walked[walked.length - 1]];
+  let acc = 0;
+  for (let i = walked.length - 1; i >= 1; i--) {
+    const a = walked[i];
+    const b = walked[i - 1];
+    const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (acc + d >= maxDeg) {
+      const t = d === 0 ? 0 : (maxDeg - acc) / d;
+      rev.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      break;
+    }
+    acc += d;
+    rev.push(b);
+  }
+  return rev.reverse();
 }
 
-export function splitRoutesAt(dateStr: string): RouteSplit {
-  const now = parseLooseDate(dateStr);
+/** 按连续时间戳或 ISO 日期切分四支主力的已走实线、前锋尾迹、未走虚线与当前位置头 */
+export function splitRoutesAt(dateOrTs: string | number): RouteSplit {
+  const now = typeof dateOrTs === 'number' ? dateOrTs : parseLooseDate(dateOrTs);
   const past: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-  const active: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+  const lead: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
   const future: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-  const heads: RouteSplit['heads'] = [];
+  const heads: RouteHead[] = [];
 
-  for (const seg of routeSegments) {
-    const army = armies.find((a) => a.id === seg.armyId);
-    if (!army) continue;
-    const t0 = parseLooseDate(seg.from);
-    const t1 = parseLooseDate(seg.to);
-
-    if (now >= t1) {
-      past.features.push(feature(seg, army, seg.path.map((p) => p.coord)));
-    } else if (now < t0) {
-      future.features.push(feature(seg, army, seg.path.map((p) => p.coord)));
-    } else {
-      const { coords, head } = truncate(seg, now);
-      if (coords.length >= 2) active.features.push(feature(seg, army, coords));
-      if (head) heads.push({ army, coord: head, label: seg.label });
-    }
-  }
-
-  // 已结束的行军也给出终点作为"当前位置"
   for (const army of armies) {
-    if (now >= parseLooseDate(army.endDate)) {
-      const segs = routeSegments.filter((s) => s.armyId === army.id);
-      const last = segs[segs.length - 1];
-      const end = last.path[last.path.length - 1];
-      heads.push({ army, coord: end.coord, label: `${army.short} 长征终点` });
+    const pSegs = PREPARED.filter((p) => p.army.id === army.id);
+    if (pSegs.length === 0) continue;
+
+    const armyWalked: LonLat[] = [];
+    let activeHead: RouteHead | null = null;
+
+    for (const p of pSegs) {
+      const { seg, coords, times, tStart, tEnd } = p;
+      const lastIdx = coords.length - 1;
+
+      if (now <= times[0]) {
+        future.features.push(lineFeature(seg.id, army, coords, { label: seg.label }));
+      } else if (now >= times[lastIdx]) {
+        past.features.push(lineFeature(seg.id, army, coords, { label: seg.label }));
+        for (const c of coords) {
+          const prev = armyWalked[armyWalked.length - 1];
+          if (!prev || prev[0] !== c[0] || prev[1] !== c[1]) armyWalked.push(c);
+        }
+        if (now >= tStart && now < tEnd) {
+          activeHead = { army, coord: coords[lastIdx], label: seg.label, status: 'marching' };
+        }
+      } else {
+        // 精确落在 times[k] <= now < times[k+1]
+        let k = 0;
+        while (k + 1 < lastIdx && times[k + 1] <= now) k++;
+        // 跳过零时长重合时间戳，定位到真正跨时间的区间
+        while (k + 1 < lastIdx && times[k + 1] === times[k]) k++;
+        const dt = times[k + 1] - times[k];
+        const u = dt > 0 ? Math.max(0, Math.min(1, (now - times[k]) / dt)) : 1;
+        const a = coords[k];
+        const b = coords[k + 1];
+        const headCoord: LonLat = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+
+        const walked = [...coords.slice(0, k + 1), headCoord];
+        const ahead = [headCoord, ...coords.slice(k + 1)];
+
+        if (walked.length >= 2) past.features.push(lineFeature(seg.id, army, walked, { label: seg.label }));
+        if (ahead.length >= 2) future.features.push(lineFeature(`${seg.id}-rem`, army, ahead, { label: seg.label }));
+
+        for (const c of walked) {
+          const prev = armyWalked[armyWalked.length - 1];
+          if (!prev || prev[0] !== c[0] || prev[1] !== c[1]) armyWalked.push(c);
+        }
+        activeHead = { army, coord: headCoord, label: seg.label, status: 'marching' };
+      }
+    }
+
+    // 起始时刻（1934-10-10）给已处于出发点的红一方面军标出起点行军头
+    const firstSeg = pSegs[0];
+    const lastSeg = pSegs[pSegs.length - 1];
+    if (!activeHead && Math.abs(now - firstSeg.tStart) < 1000) {
+      activeHead = {
+        army,
+        coord: firstSeg.coords[0],
+        label: firstSeg.seg.label,
+        status: 'marching',
+      };
+    }
+
+    if (activeHead) {
+      heads.push(activeHead);
+      const trail = extractLeadTrail(armyWalked, 1.4);
+      if (trail.length >= 2) {
+        lead.features.push(lineFeature(`${army.id}-lead`, army, trail));
+      }
+    } else if (now >= lastSeg.tEnd) {
+      const endCoord = lastSeg.coords[lastSeg.coords.length - 1];
+      heads.push({
+        army,
+        coord: endCoord,
+        label: `胜利会师 · 抵达${army.endPlace.replace(/（.*）/, '')}`,
+        status: 'arrived',
+      });
     }
   }
 
-  return { past, active, future, heads };
+  return { past, lead, future, heads };
 }
 
 const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
@@ -159,10 +256,10 @@ const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
 export function addRouteLayers(map: MlMap) {
   map.addSource('routes-future', { type: 'geojson', data: empty });
   map.addSource('routes-past', { type: 'geojson', data: empty });
-  map.addSource('routes-active', { type: 'geojson', data: empty });
-  map.addSource('routes-ghost', { type: 'geojson', data: empty });
+  map.addSource('routes-lead', { type: 'geojson', data: empty });
   map.addSource('route-heads', { type: 'geojson', data: empty });
 
+  // 未走虚线：始终铺在最下层，行军实线推进时从上方自然覆盖，不会整段突然消失
   map.addLayer({
     id: 'routes-future-line',
     type: 'line',
@@ -170,12 +267,13 @@ export function addRouteLayers(map: MlMap) {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 8, 3.2],
-      'line-opacity': ['coalesce', ['get', 'alpha'], 0.55],
-      'line-dasharray': [2.6, 1.8],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 1.9, 8, 3.0],
+      'line-opacity': 0.44,
+      'line-dasharray': [2.4, 2.0],
     },
   });
 
+  // 已走实线光晕
   map.addLayer({
     id: 'routes-past-glow',
     type: 'line',
@@ -184,11 +282,12 @@ export function addRouteLayers(map: MlMap) {
     paint: {
       'line-color': ['get', 'color'],
       'line-width': ['interpolate', ['linear'], ['zoom'], 3, 9, 8, 17],
-      'line-opacity': ['*', 0.22, ['coalesce', ['get', 'alpha'], 1]],
+      'line-opacity': 0.23,
       'line-blur': 4,
     },
   });
 
+  // 已走实线主体
   map.addLayer({
     id: 'routes-past-line',
     type: 'line',
@@ -196,196 +295,152 @@ export function addRouteLayers(map: MlMap) {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.4, 8, 4.2],
-      'line-opacity': ['coalesce', ['get', 'alpha'], 1],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.6, 8, 4.4],
+      'line-opacity': 0.96,
     },
   });
 
-  // 残影层：刚由「未到达」或「行进中」转为「已走过」的虚线在这里淡出，
-  // 让虚线消失与实线出现之间有 600~800ms 的交叉过渡，而不是硬切。
+  // 行军前锋高亮尾迹（紧随圆点后方 ~140km 的暖亮光带，增强连续推进感）
   map.addLayer({
-    id: 'routes-ghost-line',
+    id: 'routes-lead-glow',
     type: 'line',
-    source: 'routes-ghost',
+    source: 'routes-lead',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.2, 8, 3.4],
-      'line-opacity': ['coalesce', ['get', 'alpha'], 0.5],
-      'line-dasharray': [2.6, 1.8],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 12, 8, 22],
+      'line-opacity': 0.34,
+      'line-blur': 5,
     },
   });
 
   map.addLayer({
-    id: 'routes-active-line',
+    id: 'routes-lead-line',
     type: 'line',
-    source: 'routes-active',
+    source: 'routes-lead',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-color': ['get', 'color'],
-      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 2.4, 8, 4.2],
-      'line-opacity': 1,
-      'line-dasharray': [2.6, 1.8],
+      'line-color': '#ffd9d2',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 3, 1.4, 8, 2.2],
+      'line-opacity': 0.72,
     },
   });
 
+  // 当前行军位置呼吸外环
+  map.addLayer({
+    id: 'route-heads-halo',
+    type: 'circle',
+    source: 'route-heads',
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 7.5, 8, 13],
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.28,
+      'circle-blur': 0.45,
+    },
+  });
+
+  // 当前行军位置实心圆点
   map.addLayer({
     id: 'route-heads-circle',
     type: 'circle',
     source: 'route-heads',
     paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3.5, 8, 6],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3.8, 8, 6.2],
       'circle-color': ['get', 'color'],
       'circle-stroke-width': 2,
-      'circle-stroke-color': '#0b0f14',
+      'circle-stroke-color': '#f8fafc',
       'circle-opacity': 1,
     },
   });
 }
 
-// ---------------------------------------------------------------- 过渡状态机
-
-type Phase = 'past' | 'active' | 'future';
-
-/** 段从虚线转为实线的过渡时长（毫秒，真实时间，与时间轴速度无关） */
-const FADE_MS = 760;
-/** 刚转入 past 的段，记录真实时间起点 */
-const freshPast = new Map<string, number>();
-/** 虚线残影：刚离开 future / active 的段 */
-interface Ghost {
-  feature: GeoJSON.Feature;
-  base: number;
-  start: number;
-}
-const ghosts = new Map<string, Ghost>();
-const phaseOf = new Map<string, Phase>();
-
-let appliedMap: MlMap | null = null;
-let appliedSplit: RouteSplit | null = null;
-let animRaf = 0;
-
-const fc = (features: GeoJSON.Feature[]): GeoJSON.FeatureCollection => ({ type: 'FeatureCollection', features });
-
-const keyOf = (f: GeoJSON.Feature) => String(f.properties?.id ?? '');
-
-const withAlpha = (f: GeoJSON.Feature, alpha: number): GeoJSON.Feature => ({
-  ...f,
-  properties: { ...(f.properties ?? {}), alpha },
-});
-
-/** easeOutCubic：起步快、收尾慢，肉眼上更接近"慢慢显影"而不是线性变亮 */
-const easeOut = (k: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, k)), 3);
-
-/** 对比新旧阶段，登记需要过渡的段 */
-function reconcile(split: RouteSplit, now: number) {
-  const next = new Map<string, Phase>();
-  for (const f of split.past.features) next.set(keyOf(f), 'past');
-  for (const f of split.active.features) next.set(keyOf(f), 'active');
-  for (const f of split.future.features) next.set(keyOf(f), 'future');
-
-  const find = (coll: GeoJSON.FeatureCollection, id: string) =>
-    coll.features.find((f) => keyOf(f) === id) ?? null;
-
-  for (const [id, phase] of next) {
-    const prev = phaseOf.get(id);
-    if (!prev || prev === phase) continue;
-    if (prev === 'future' && phase === 'active') {
-      const src = find(split.active, id);
-      if (src) ghosts.set(id, { feature: src, base: 0.5, start: now });
-    } else if (prev === 'active' && phase === 'past') {
-      const src = find(split.past, id);
-      if (src) {
-        ghosts.set(id, { feature: src, base: 0.8, start: now });
-        freshPast.set(id, now);
-      }
-    }
+export function setRouteArmyFilter(map: MlMap, visibleArmyIds: string[]) {
+  const expr = visibleArmyIds.length
+    ? (['in', ['get', 'armyId'], ['literal', visibleArmyIds]] as unknown as FilterSpecification)
+    : (['==', ['get', 'armyId'], '__none__'] as unknown as FilterSpecification);
+  for (const lid of ROUTE_LAYER_IDS) {
+    if (map.getLayer(lid)) map.setFilter(lid, expr);
   }
-
-  phaseOf.clear();
-  for (const [id, p] of next) phaseOf.set(id, p);
-
-  // 时间轴回拖时清掉不再存在的过渡记录，避免下次进入同一段时错误地"半透明"
-  for (const id of freshPast.keys()) if (phaseOf.get(id) !== 'past') freshPast.delete(id);
 }
 
-/** 按真实时间计算各层透明度并写入 source；返回是否还有未完成的过渡 */
-function flush(map: MlMap, split: RouteSplit, now: number): boolean {
-  let busy = false;
+// ---------------------------------------------------------------- 平滑跳转控制器
 
-  const past = split.past.features.map((f) => {
-    const t = freshPast.get(keyOf(f));
-    if (t === undefined) return f;
-    const k = easeOut((now - t) / FADE_MS);
-    if (k >= 1) {
-      freshPast.delete(keyOf(f));
-      return f;
-    }
-    busy = true;
-    return withAlpha(f, 0.3 + 0.7 * k);
-  });
+let currentRenderedTs: number | null = null;
+let tweenRaf = 0;
+let onHeadsCallback: ((heads: RouteHead[]) => void) | null = null;
 
-  const ghostFeatures: GeoJSON.Feature[] = [];
-  for (const [id, g] of ghosts) {
-    const k = easeOut((now - g.start) / FADE_MS);
-    if (k >= 1) {
-      ghosts.delete(id);
-      continue;
-    }
-    busy = true;
-    ghostFeatures.push(withAlpha(g.feature, g.base * (1 - k)));
-  }
+export function onRouteHeadsChange(cb: (heads: RouteHead[]) => void) {
+  onHeadsCallback = cb;
+}
 
+function writeSplitToMap(map: MlMap, split: RouteSplit) {
   (map.getSource('routes-future') as GeoJSONSource | undefined)?.setData(split.future);
-  (map.getSource('routes-past') as GeoJSONSource | undefined)?.setData(fc(past));
-  (map.getSource('routes-ghost') as GeoJSONSource | undefined)?.setData(fc(ghostFeatures));
-  (map.getSource('routes-active') as GeoJSONSource | undefined)?.setData(split.active);
+  (map.getSource('routes-past') as GeoJSONSource | undefined)?.setData(split.past);
+  (map.getSource('routes-lead') as GeoJSONSource | undefined)?.setData(split.lead);
 
-  const heads: GeoJSON.FeatureCollection = {
+  const headsGeo: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
     features: split.heads.map((h) => ({
       type: 'Feature',
-      properties: { color: h.army.color, armyId: h.army.id },
+      properties: { color: h.army.color, armyId: h.army.id, status: h.status },
       geometry: { type: 'Point', coordinates: h.coord },
     })),
   };
-  (map.getSource('route-heads') as GeoJSONSource | undefined)?.setData(heads);
-
-  return busy;
-}
-
-/** 时间轴暂停时，过渡仍需按真实时间走完 */
-function ensureAnim() {
-  if (animRaf) return;
-  const loop = () => {
-    animRaf = 0;
-    if (!appliedMap || !appliedSplit) return;
-    if (flush(appliedMap, appliedSplit, performance.now())) animRaf = requestAnimationFrame(loop);
-  };
-  animRaf = requestAnimationFrame(loop);
-}
-
-export function updateRouteLayers(map: MlMap, split: RouteSplit) {
-  const now = performance.now();
-  appliedMap = map;
-  appliedSplit = split;
-  reconcile(split, now);
-  if (flush(map, split, now)) ensureAnim();
+  (map.getSource('route-heads') as GeoJSONSource | undefined)?.setData(headsGeo);
+  onHeadsCallback?.(split.heads);
 }
 
 /**
- * 行进段的呼吸光效。
- *
- * 早期版本每 90ms 在两种 dasharray 之间硬切做"虚线流动"，实测视觉上是闪烁而非流动
- * （maplibre 没有 dashoffset，dasharray 无法连续插值）。这里改为按帧连续变化透明度，
- * 保持虚线形态稳定，只让明暗平缓起伏。
+ * 更新路线图层。
+ * - 正常播放或拖动滑块时（animate = false）：按连续毫秒时间戳 60fps 实时切分；
+ * - 点击节点跳转大跨度日期时（animate = true）：用 320ms 缓动让实线顺着轨迹追赶过去。
  */
+export function updateRouteLayers(map: MlMap, splitOrTs: RouteSplit | number, animate = false) {
+  if (typeof splitOrTs !== 'number') {
+    cancelAnimationFrame(tweenRaf);
+    tweenRaf = 0;
+    writeSplitToMap(map, splitOrTs);
+    return;
+  }
+
+  const targetTs = splitOrTs;
+  cancelAnimationFrame(tweenRaf);
+  tweenRaf = 0;
+
+  if (!animate || currentRenderedTs === null || Math.abs(targetTs - currentRenderedTs) < 2 * DAY_MS) {
+    currentRenderedTs = targetTs;
+    writeSplitToMap(map, splitRoutesAt(targetTs));
+    return;
+  }
+
+  const fromTs = currentRenderedTs;
+  const t0 = performance.now();
+  const duration = 320;
+  const step = (now: number) => {
+    const k = Math.min(1, Math.max(0, (now - t0) / duration));
+    const eased = 1 - Math.pow(1 - k, 3);
+    currentRenderedTs = fromTs + (targetTs - fromTs) * eased;
+    writeSplitToMap(map, splitRoutesAt(currentRenderedTs));
+    if (k < 1) {
+      tweenRaf = requestAnimationFrame(step);
+    } else {
+      tweenRaf = 0;
+    }
+  };
+  tweenRaf = requestAnimationFrame(step);
+}
+
+/** 行军头光晕与前锋尾迹的柔和呼吸动效 */
 export function startRouteFlow(map: MlMap) {
   let raf = 0;
   const t0 = performance.now();
   const tick = (t: number) => {
-    const s = 0.5 + 0.5 * Math.sin((t - t0) / 1200);
-    if (map.getLayer('routes-active-line')) {
-      map.setPaintProperty('routes-active-line', 'line-opacity', 0.82 + 0.18 * s);
+    const s = 0.5 + 0.5 * Math.sin((t - t0) / 700);
+    if (map.getLayer('route-heads-halo')) {
+      map.setPaintProperty('route-heads-halo', 'circle-opacity', 0.18 + 0.24 * s);
+    }
+    if (map.getLayer('routes-lead-glow')) {
+      map.setPaintProperty('routes-lead-glow', 'line-opacity', 0.24 + 0.18 * s);
     }
     raf = requestAnimationFrame(tick);
   };
@@ -393,4 +448,4 @@ export function startRouteFlow(map: MlMap) {
   return () => cancelAnimationFrame(raf);
 }
 
-export { PALETTE };
+export { routeSegments, PALETTE };

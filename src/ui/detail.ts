@@ -1,5 +1,6 @@
 /** 节点详情面板渲染 */
 import type { StoryNode } from '../data/types';
+import { NODE_SITUATION_LINKS, situationBundles } from '../data/situations';
 import { KIND_META, escapeHtml } from '../map/nodes';
 
 const CONF_TEXT: Record<string, string> = {
@@ -36,6 +37,28 @@ export function renderNodeDetail(node: StoryNode): string {
       <span>${escapeHtml(node.place)}</span>
     </div>
     <p class="dt-brief">${escapeHtml(node.brief)}</p>
+  `);
+
+  const sitLink = NODE_SITUATION_LINKS[node.id];
+  if (sitLink) {
+    const bIdx = situationBundles.findIndex((b) => b.situation.id === sitLink.bundleId);
+    if (bIdx >= 0) {
+      parts.push(`
+        <button
+          type="button"
+          class="dt-sit-jump"
+          data-sit-bundle="${bIdx}"
+          data-sit-phase="${sitLink.phaseIndex}"
+        >
+          <span class="dt-sit-jump__dot"></span>
+          <span>${escapeHtml(sitLink.buttonLabel)}</span>
+          <span class="dt-sit-jump__arrow" aria-hidden="true">→</span>
+        </button>
+      `);
+    }
+  }
+
+  parts.push(`
     <div class="dt-body">
       ${node.detail
         .split('\n\n')

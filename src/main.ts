@@ -1,5 +1,5 @@
 /**
- * 应用主入口：装配地图 / 路线 / 节点 / 时间轴 / 态势面板。
+ * 应用主入口：装配地图 / 连续路线 / 敌军联动态势 / 节点与注记 / 时间轴 / 战役态势面板。
  */
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -10,16 +10,24 @@ import { armies } from './data/armies';
 import { centralRedNodes } from './data/nodes-central';
 import { otherNodes } from './data/nodes-others';
 import { routeSegments } from './data/routes';
+import { situationBundles } from './data/situations';
 import type { NodeKind, StoryNode } from './data/types';
 import { buildBaseStyle, loadDetailTerrains, loadTerrainMeta } from './map/basemap';
+import { OverviewEnemyLayer } from './map/enemyOverview';
 import { KIND_META, NodeLayer } from './map/nodes';
-import { addRouteLayers, splitRoutesAt, startRouteFlow, updateRouteLayers } from './map/routes';
+import { RouteLabelLayer } from './map/routeLabels';
+import {
+  addRouteLayers,
+  onRouteHeadsChange,
+  parseLooseDate,
+  setRouteArmyFilter,
+  startRouteFlow,
+  updateRouteLayers,
+} from './map/routes';
 import { addSituationLayers } from './map/situation';
 import { renderAbout, renderNodeDetail } from './ui/detail';
 import { SituationPanel } from './ui/situationPanel';
 import { Timeline } from './ui/timeline';
-import { situationBundles } from './data/situations';
-import { RouteLabelLayer } from './map/routeLabels';
 
 const allNodes: StoryNode[] = [...centralRedNodes, ...otherNodes].sort((a, b) => a.date.localeCompare(b.date));
 
@@ -59,15 +67,17 @@ async function boot() {
 
   // ---------------------------------------------------------------- 图层
   addRouteLayers(map);
+  const enemyOverview = new OverviewEnemyLayer(map);
   addSituationLayers(map);
+
+  const routeLabels = new RouteLabelLayer(map);
+  onRouteHeadsChange((heads) => routeLabels.updateHeads(heads));
 
   const nodeLayer = new NodeLayer({
     map,
     nodes: allNodes,
     onSelect: (node) => openDetail(node),
   });
-  // 路线注记：直接把"这条线是谁的"标在图上，不再只靠图例辨认
-  const routeLabels = new RouteLabelLayer(map);
 
   // ---------------------------------------------------------------- 时间轴
   const timeline = new Timeline({
@@ -75,13 +85,16 @@ async function boot() {
     end: '1936-10-22',
     markers: allNodes,
     durationSeconds: 56,
-    onDate: (iso) => {
-      updateRouteLayers(map, splitRoutesAt(iso));
+    onDate: (iso, tsMs, meta) => {
+      updateRouteLayers(map, tsMs, Boolean(meta.jump));
+      enemyOverview.setDate(tsMs);
       nodeLayer.setDateCutoff(iso);
     },
   });
 
-  updateRouteLayers(map, splitRoutesAt(timeline.currentDate));
+  const initTs = parseLooseDate(timeline.currentDate);
+  updateRouteLayers(map, initTs, false);
+  enemyOverview.setDate(initTs);
   nodeLayer.setDateCutoff(timeline.currentDate);
 
   const stopFlow = startRouteFlow(map);
@@ -98,7 +111,7 @@ async function boot() {
     detail.setAttribute('aria-hidden', 'false');
     detail.scrollTop = 0;
     nodeLayer.setSelected(node.id);
-    timeline.setDate(node.date);
+    timeline.setDate(node.date, true);
 
     // 让点位落在未被抽屉遮挡的区域
     const offset = window.innerWidth > 760 ? -215 : 0;
@@ -116,6 +129,15 @@ async function boot() {
     detail.setAttribute('aria-hidden', 'true');
     nodeLayer.setSelected(null);
   }
+
+  // 详情面板内「一键查看本役作战态势详图」按钮事件委托
+  detailBody.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.dt-sit-jump');
+    if (!btn) return;
+    const bIdx = Number(btn.dataset.sitBundle ?? '0');
+    const pIdx = Number(btn.dataset.sitPhase ?? '0');
+    enterSituation(bIdx, pIdx);
+  });
 
   document.getElementById('detail-close')?.addEventListener('click', closeDetail);
   document.addEventListener('keydown', (e) => {
@@ -157,21 +179,24 @@ async function boot() {
 
   function applyRouteFilter() {
     const ids = armies.map((a) => a.id).filter((id) => !hiddenArmies.has(id));
-    const filter: maplibregl.ExpressionSpecification | null = ids.length
-      ? ['in', ['get', 'armyId'], ['literal', ids]]
-      : ['==', ['get', 'armyId'], '__none__'];
-    for (const lid of [
-      'routes-future-line',
-      'routes-past-glow',
-      'routes-past-line',
-      'routes-ghost-line',
-      'routes-active-line',
-    ]) {
-      map.setFilter(lid, filter as unknown as maplibregl.FilterSpecification);
-    }
-    map.setFilter('route-heads-circle', filter as unknown as maplibregl.FilterSpecification);
+    setRouteArmyFilter(map, ids);
     routeLabels.setVisible(new Set(ids));
   }
+
+  // 敌军联动态势与底图省河注记开关
+  const toggleEnemyEl = document.getElementById('toggle-enemy-ov');
+  toggleEnemyEl?.addEventListener('click', () => {
+    const next = !enemyOverview.isEnabled;
+    enemyOverview.setEnabled(next);
+    toggleEnemyEl.classList.toggle('is-off', !next);
+  });
+
+  const toggleGeoEl = document.getElementById('toggle-geo-labels');
+  toggleGeoEl?.addEventListener('click', () => {
+    const next = !routeLabels.isGeoEnabled;
+    routeLabels.setGeoEnabled(next);
+    toggleGeoEl.classList.toggle('is-off', !next);
+  });
 
   const legendKinds = document.getElementById('legend-kinds') as HTMLElement;
   const kinds = Object.keys(KIND_META) as NodeKind[];
@@ -214,20 +239,16 @@ async function boot() {
   const situation = new SituationPanel(map, situationBundles, exitSituation);
   const timelineBar = document.getElementById('timeline') as HTMLElement;
 
-  function enterSituation(bundleIndex = situation.currentBundleIndex) {
+  function enterSituation(bundleIndex = situation.currentBundleIndex, phaseIndex = 0) {
     timeline.pause();
     closeDetail();
     document.body.classList.add('lm-mode-situation');
     timelineBar.classList.add('is-hidden');
     nodeLayer.setVisible(new Set());
     routeLabels.setMode(true);
-    map.setFilter('routes-future-line', ['==', ['get', 'armyId'], '__none__']);
-    map.setFilter('routes-past-glow', ['==', ['get', 'armyId'], '__none__']);
-    map.setFilter('routes-past-line', ['==', ['get', 'armyId'], '__none__']);
-    map.setFilter('routes-active-line', ['==', ['get', 'armyId'], '__none__']);
-    map.setFilter('routes-ghost-line', ['==', ['get', 'armyId'], '__none__']);
-    map.setFilter('route-heads-circle', ['==', ['get', 'armyId'], '__none__']);
-    situation.open(bundleIndex);
+    enemyOverview.setMode(true);
+    setRouteArmyFilter(map, []);
+    situation.open(bundleIndex, phaseIndex);
   }
 
   function exitSituation() {
@@ -236,6 +257,7 @@ async function boot() {
     timelineBar.classList.remove('is-hidden');
     nodeLayer.setVisible(visibleKinds);
     routeLabels.setMode(false);
+    enemyOverview.setMode(false);
     applyRouteFilter();
     map.fitBounds(HOME_BOUNDS, { padding: HOME_PADDING, duration: 1000 });
   }
@@ -272,6 +294,8 @@ async function boot() {
     map,
     timeline,
     situation,
+    enemyOverview,
+    routeLabels,
     nodes: allNodes,
     openDetail,
     enterSituation,
